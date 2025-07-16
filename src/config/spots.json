@@ -18,17 +18,17 @@
       "id": "spot-analysis-top-1",
       "price": 29,
       "duration": "30d",
-      "available": true,
-      "startDate": "2024-04-20",
-      "endDate": "2024-05-19",
+      "available": false,
+      "startDate": "2025-07-16",
+      "endDate": "2025-08-15",
       "stripeUrl": "https://buy.stripe.com/00gaFK1tXbtP2vSfYZ",
       "data": {
-        "name": "Bilal Bakr",
-        "username": "bil0090",
-        "avatar": "https://pbs.twimg.com/profile_images/1913570629351002112/TToDhORd_400x400.jpg",
+        "name": "Kyler Cox",
+        "username": "Kahuna_kyler",
+        "avatar": "https://pbs.twimg.com/profile_images/1943505495320596483/Qf_VSfYV_400x400.jpg",
         "verified": false,
-        "bio": "14 y/o Software Engineer, Co-founder, & CTO in middle school. building cool stuff & sharing the journey 🚀💻",
-        "url": "https://x.com/bil0090"
+        "bio": "Using words to build communities / Ghostwriter for the underestimated, the iconic & the next in line",
+        "url": "https://x.com/kahuna_kyler"
       }
     },
     {
@@ -69,7 +69,7 @@
       "id": "spot-analysis-bottom-1",
       "price": 29,
       "duration": "30d",
-      "available": false,
+      "available": true,
       "startDate": "2024-05-24",
       "endDate": "2024-06-23",
       "stripeUrl": "https://buy.stripe.com/3csaFK8Wp69v9YkeUY",

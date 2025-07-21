@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import spotsConfig from '@/config/spots.json';
 import Link from 'next/link';
 import { buttonVariants } from '@/components/ui/button';
+import Image from 'next/image';
 
 interface BannerSpotProps {
   id: string;
@@ -32,7 +33,10 @@ export function BannerSpot({ id, className }: BannerSpotProps) {
         <div className="flex items-center gap-2">
           <span className="text-xs text-[#71767b]">Ad</span>
           <span className="text-[#1d9bf0]">•</span>
-          <span>{!spot.available ? spot.data.title : 'Want to be our sponsor?'}</span>
+          {spot.logo && <Image src={spot.logo} alt={spot.data.title} width={24} height={24} />}
+          <span className="font-bold">
+            {!spot.available ? spot.data.title : 'Want to be our sponsor?'}
+          </span>
           <span className="text-[#1d9bf0]">–</span>
           <span>
             {!spot.available

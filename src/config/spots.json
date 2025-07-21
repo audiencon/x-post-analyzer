@@ -8,10 +8,11 @@
       "endDate": "2024-05-19",
       "available": false,
       "stripeUrl": "https://buy.stripe.com/dR6cNS3C569v1rOaEH",
+      "logo": "https://www.synapt.app/logo.png",
       "data": {
-        "title": "Themeptation",
-        "description": "Landing page & templates for Startups and SaaS",
-        "url": "https://www.themeptation.net"
+        "title": "Synapt",
+        "description": "Get 3x more engagement while spending 70% less time on social media",
+        "url": "https://www.synapt.app?ref=postroast"
       }
     },
     {

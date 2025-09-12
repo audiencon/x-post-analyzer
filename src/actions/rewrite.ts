@@ -1,9 +1,11 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use server';
 
 import OpenAI from 'openai';
 import Cookies from 'js-cookie';
 import { DEFAULT_MODEL } from '@/config/openai';
 import creatorsData from '@/data/creators.json';
+import { MAX_REQUESTS, WINDOW_MS } from '@/config/constants';
 
 interface Tweet {
   text: string;
@@ -33,10 +35,30 @@ export interface RewrittenPost {
 export async function rewritePost(
   content: string,
   username: string,
-  apiKey: string
+  userApiKey?: string
 ): Promise<RewrittenPost> {
+  const globalAny = global as any;
+  if (!globalAny.__rewrite_usage__) {
+    globalAny.__rewrite_usage__ = { count: 0, windowStart: Date.now() } as {
+      count: number;
+      windowStart: number;
+    };
+  }
+  const usage = globalAny.__rewrite_usage__ as { count: number; windowStart: number };
+  const now = Date.now();
+  if (now - usage.windowStart > WINDOW_MS) {
+    usage.count = 0;
+    usage.windowStart = now;
+  }
+  if (usage.count >= MAX_REQUESTS) {
+    throw new Error(`Usage limit reached (${MAX_REQUESTS} requests per hour)`);
+  }
+  usage.count += 1;
+  const apiKey = userApiKey || process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error('OpenAI API key is required');
+    throw new Error(
+      'OpenAI API key is required. Please provide your API key or set OPENAI_API_KEY environment variable.'
+    );
   }
 
   try {

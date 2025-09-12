@@ -1,4 +1,4 @@
-import { AnalyzeForm } from '@/components/analyze/analyze-form';
+import ClientHome from './ui/ClientHome';
 import { Metadata } from 'next';
 
 export const metadata: Metadata = {
@@ -16,7 +16,7 @@ export default async function Home() {
           <div key={i} className="border-[0.5px] border-gray-100/20" />
         ))}
       </div>
-      <AnalyzeForm />
+      <ClientHome />
     </main>
   );
 }

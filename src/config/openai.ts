@@ -1,5 +1,5 @@
 export const DEFAULT_MODEL = 'gpt-4o-mini';
-export const DEFAULT_API_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY || '';
+export const DEFAULT_API_KEY = process.env.OPENAI_API_KEY || '';
 
 export const AVAILABLE_MODELS = [
   { id: 'gpt-4o', name: 'GPT-4o' },

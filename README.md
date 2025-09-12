@@ -13,7 +13,7 @@ for improvement. Built with Next.js and OpenAI.
 - 🎉 Confetti celebration for good scores
 - 🎨 Clean and modern UI with dark theme
 - ⚡ Instant results with no sign-up required
-- 🔒 Secure API key management (stored in browser cookies)
+- 🔒 Secure API key management (server-side environment variables + optional user API keys)
 
 ## 🚀 Getting Started
 
@@ -21,7 +21,21 @@ for improvement. Built with Next.js and OpenAI.
 
 - Node.js 18.17 or later
 - pnpm (recommended) or npm
-- OpenAI API key (you'll be prompted to enter it when you first use the app)
+- OpenAI API key
+
+### Environment Setup
+
+1. Create a `.env.local` file in the root directory:
+   ```bash
+   # OpenAI Configuration
+   OPENAI_API_KEY=your_openai_api_key_here
+   ```
+
+2. Get your OpenAI API key from [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+
+3. Replace `your_openai_api_key_here` with your actual API key
+
+**Important Security Note**: Never commit your `.env.local` file to version control. The `.gitignore` file is already configured to exclude environment files.
 
 ### Installation
 
@@ -48,7 +62,7 @@ for improvement. Built with Next.js and OpenAI.
 
 4. Open [http://localhost:3000](http://localhost:3000) in your browser
 
-5. When you first use the app, you'll be prompted to enter your OpenAI API key. This key is securely stored in your browser's cookies and never sent to any server other than OpenAI's.
+5. The app will use your OpenAI API key from the environment variable for all AI operations. Users can also provide their own API key for unlimited usage, while the default key has a 10 requests/hour limit. All API keys are handled server-side only, ensuring maximum security.
 
 ## 🛠️ Tech Stack
 

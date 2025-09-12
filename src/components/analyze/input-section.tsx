@@ -15,13 +15,16 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { ArrowUp, Loader2, Key, Sparkles, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { AVAILABLE_MODELS, DEFAULT_MODEL, DEFAULT_API_KEY } from '@/config/openai';
+import { AVAILABLE_MODELS, DEFAULT_MODEL } from '@/config/openai';
 import { getViralRewrite } from '@/actions/viralRewrite';
-import Cookies from 'js-cookie';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import { PostPreviewSpot } from '../spots/post-preview-spot';
+import { checkClientRateLimit } from '@/lib/rate-limit';
+import { buildViralRewritePrompt } from '@/lib/prompt-builders';
+import { showGenericError, showUsageLimitToast } from '@/lib/toast-helpers';
+import { MAX_REQUESTS, USAGE_STORAGE_KEY, WINDOW_MS } from '@/config/constants';
 
 // Constants passed as props or defined here if static
 // const NICHES = [...];
@@ -30,16 +33,8 @@ import { PostPreviewSpot } from '../spots/post-preview-spot';
 // Constants
 
 // --- Rate Limiting Constants ---
-const REWRITE_MAX_REQUESTS = 10; // Max rewrite requests allowed (can be different from analyze)
-const REWRITE_TIME_WINDOW_MS = 60 * 60 * 1000; // 1 hour in milliseconds
-const REWRITE_USAGE_STORAGE_KEY = 'rewriteUsageData';
 // --- End Constants ---
 
-// --- Usage Tracking Types ---
-interface UsageData {
-  count: number;
-  timestamp: number;
-}
 // --- End Types ---
 
 // --- Custom Markdown Components with Tailwind Styling ---
@@ -194,88 +189,26 @@ export function InputSection({
     setRewriteResult(null);
   }, [content]);
 
-  // --- Rate Limiting Helpers (for Rewrites) ---
-  const getUsageData = (): UsageData | null => {
-    try {
-      const data = localStorage.getItem(REWRITE_USAGE_STORAGE_KEY);
-      return data ? JSON.parse(data) : null;
-    } catch (error) {
-      console.error('Error reading rewrite usage data from localStorage:', error);
-      return null;
-    }
-  };
-
-  const setUsageData = (data: UsageData): void => {
-    try {
-      localStorage.setItem(REWRITE_USAGE_STORAGE_KEY, JSON.stringify(data));
-    } catch (error) {
-      console.error('Error saving rewrite usage data to localStorage:', error);
-    }
-  };
-
+  // --- Rate Limiting Helper (for Rewrites) ---
   const checkUsageLimit = (): boolean => {
-    const now = Date.now();
-    let usage = getUsageData();
-
-    // Reset if timestamp is outside the window or data is invalid
-    if (!usage || now - usage.timestamp > REWRITE_TIME_WINDOW_MS) {
-      usage = { count: 0, timestamp: now };
-    }
-
-    if (usage.count >= REWRITE_MAX_REQUESTS) {
-      // Limit exceeded
-      const timeLeft = Math.ceil((usage.timestamp + REWRITE_TIME_WINDOW_MS - now) / (60 * 1000));
-      toast.error(`Rewrite limit reached (${REWRITE_MAX_REQUESTS} per hour)`, {
-        description: `Please try again in ${timeLeft} minute(s).`,
-        className: 'bg-[#1a1a1a] border border-[#333] text-white',
-      });
-      return false;
-    } else {
-      // Allowed, increment count and update timestamp
-      usage.count += 1;
-      usage.timestamp = now; // Always update timestamp on allowed request
-      setUsageData(usage);
-      return true;
-    }
+    const res = checkClientRateLimit(USAGE_STORAGE_KEY, MAX_REQUESTS, WINDOW_MS);
+    if (res.allowed) return true;
+    showUsageLimitToast({
+      message: `Rewrite limit reached (${MAX_REQUESTS} per hour)`,
+      description: `Please try again in ${res.timeLeftMinutes} minute(s).`,
+    });
+    return false;
   };
-  // --- End Rate Limiting Helpers ---
+  // --- End Rate Limiting Helper ---
 
-  const constructViralPrompt = (styleName: string, draft: string): string => {
-    const basePrompt = `Act like you're a top-tier X (formerly Twitter) growth strategist whose posts consistently go viral, pulling in millions of views, replies, and reposts. You deeply understand the X algorithm, how it prioritizes engagement, and how to engineer posts to trigger curiosity, emotion, and conversation.
-
-Based on the draft post I'll provide, rewrite it using the style: ${styleName}
-
-Optimize it for:
-- Hooking attention in 1 scroll
-- High retention and scrolling behavior
-- Triggering replies and reposts
-- Clear structure with optional emojis(max 3), bullets, or visuals
-- Ending with a strong CTA
-- Without hashtags
-- No hashtags
-
-Add anything else that helps break the algorithm and boost engagement.`;
-
-    const lengthConstraint = limitRewriteTo280
-      ? '\n\nIMPORTANT: The final rewritten post MUST be 280 characters or less.'
-      : '';
-
-    return `${basePrompt}${lengthConstraint}
-
-Here's my draft:
-${draft}`;
-  };
+  const constructViralPrompt = (styleName: string, draft: string): string =>
+    buildViralRewritePrompt(styleName, draft, limitRewriteTo280);
 
   const handleViralRewrite = async () => {
     if (!selectedViralStyle || !content.trim()) return;
 
-    const currentApiKey = Cookies.get('openai-api-key') || DEFAULT_API_KEY;
-    const usingDefaultKeyNow = currentApiKey === DEFAULT_API_KEY;
-
     // Apply rate limit only when using the default API key
-    if (usingDefaultKeyNow) {
-      if (!checkUsageLimit()) return; // Use the new checkUsageLimit function
-    }
+    if (!checkUsageLimit()) return; // Use the new checkUsageLimit function
 
     // No need for API key existence check here, handled by checkUsageLimit implicitly for default
     // and assumed valid if user provided one.
@@ -286,13 +219,22 @@ ${draft}`;
     const fullPrompt = constructViralPrompt(selectedViralStyle, content);
 
     try {
-      const result = await getViralRewrite(fullPrompt, currentApiKey, selectedModel);
+      const result = await getViralRewrite(fullPrompt, selectedModel);
       setRewriteResult(result);
     } catch (error) {
       console.error('Error getting viral rewrite:', error);
-      toast.error('Failed to get viral rewrite.', {
-        className: 'bg-[#1a1a1a] border border-[#333] text-white',
-      });
+      if (error instanceof Error && error.message.includes('Usage limit reached')) {
+        showUsageLimitToast({
+          message: 'Usage limit reached',
+          description:
+            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
+        });
+      } else {
+        showGenericError(
+          'Failed to get viral rewrite',
+          'Please try again or check your connection.'
+        );
+      }
     } finally {
       setIsRewriting(false);
     }
@@ -441,6 +383,7 @@ ${draft}`;
               size="sm"
               onClick={() => setShowApiKeyDialog(true)}
               className="h-8 gap-1 px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white"
+              disabled
             >
               <Key className="h-3 w-3" />
               <span>Or use your key</span>

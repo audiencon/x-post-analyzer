@@ -1,6 +1,144 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+/* TipTap Editor Styles */
+.ProseMirror {
+  outline: none;
+  padding: 0;
+  margin: 0;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #6b7280;
+  pointer-events: none;
+  height: 0;
+}
+
+.ProseMirror strong {
+  font-weight: 600;
+}
+
+.ProseMirror em {
+  font-style: italic;
+}
+
+.ProseMirror code {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.875em;
+}
+
+.ProseMirror mark {
+  background-color: rgba(34, 197, 94, 0.2);
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.25rem;
+}
+
+/* AI Changes Styles */
+.ProseMirror .ai-change {
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.25rem;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.ProseMirror .ai-change-added {
+  background-color: rgba(34, 197, 94, 0.15);
+  border-left: 3px solid rgba(34, 197, 94, 0.6);
+}
+
+.ProseMirror .ai-change-modified {
+  background-color: rgba(59, 130, 246, 0.15);
+  border-left: 3px solid rgba(59, 130, 246, 0.6);
+}
+
+.ProseMirror .ai-change-removed {
+  background-color: rgba(239, 68, 68, 0.15);
+  border-left: 3px solid rgba(239, 68, 68, 0.6);
+  text-decoration: line-through;
+}
+
+.ProseMirror .ai-change:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* AI Change Review UI */
+.ai-change-review {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.375rem;
+  padding: 0.25rem;
+  display: flex;
+  gap: 0.25rem;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+}
+
+.ai-change-review button {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  border: none;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ai-change-review .accept-btn {
+  background: rgba(34, 197, 94, 0.8);
+  color: white;
+}
+
+.ai-change-review .accept-btn:hover {
+  background: rgba(34, 197, 94, 1);
+}
+
+.ai-change-review .reject-btn {
+  background: rgba(239, 68, 68, 0.8);
+  color: white;
+}
+
+.ai-change-review .reject-btn:hover {
+  background: rgba(239, 68, 68, 1);
+}
+
+/* Streaming indicators */
+.ai-change-streaming {
+  position: relative;
+  overflow: hidden;
+}
+
+.ai-change-streaming::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(59, 130, 246, 0.3),
+    transparent
+  );
+  animation: streaming-shimmer 2s infinite;
+}
+
+@keyframes streaming-shimmer {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

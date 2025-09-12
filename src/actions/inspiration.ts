@@ -185,7 +185,7 @@ export async function getInspirationExamples(
     const tweets = apiResponse.tweets ?? [];
 
     if (tweets.length === 0) {
-      console.log('No posts for query:', searchQuery);
+      // no posts for query
       return [];
     }
 

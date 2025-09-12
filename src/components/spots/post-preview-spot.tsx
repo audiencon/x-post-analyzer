@@ -23,6 +23,24 @@ export function PostPreviewSpot({ id, content, scores, className }: PostPreviewS
 
   const url = spot.available ? spot.stripeUrl : spot.data.url;
 
+  // Deterministic pseudo-random helpers to avoid hydration mismatches
+  const hashStringToNumber = (input: string): number => {
+    let hash = 0;
+    for (let i = 0; i < input.length; i++) {
+      const chr = input.charCodeAt(i);
+      hash = (hash << 5) - hash + chr;
+      hash |= 0; // Convert to 32bit integer
+    }
+    return Math.abs(hash);
+  };
+
+  const deterministicMultiplier = (seed: number): number => {
+    const x = Math.sin(seed) * 10000;
+    const frac = x - Math.floor(x);
+    // Map to [0.9, 1.1]
+    return 0.9 + frac * 0.2;
+  };
+
   // Calculate engagement metrics
   const calculateMetrics = () => {
     if (!scores) return { replies: 0, reposts: 0, likes: 0, views: 0 };
@@ -42,14 +60,20 @@ export function PostPreviewSpot({ id, content, scores, className }: PostPreviewS
       1000 * (1 + engagementMultiplier * 2) * (1 + viralityMultiplier * 3)
     );
 
-    // Add some randomness to make it feel more realistic (±10%)
-    const randomFactor = (base: number) => Math.round(base * (0.9 + Math.random() * 0.2));
+    // Use deterministic pseudo-randomness based on stable inputs to avoid hydration mismatch
+    const seedBase = hashStringToNumber(
+      `${id}|${content}|${scores.engagement}|${scores.friendliness}|${scores.virality}`
+    );
+    const withFactor = (base: number, offset: number) => {
+      const factor = deterministicMultiplier(seedBase + offset);
+      return Math.round(base * factor);
+    };
 
     return {
-      replies: randomFactor(baseReplies),
-      reposts: randomFactor(baseReposts),
-      likes: randomFactor(baseLikes),
-      views: randomFactor(baseViews),
+      replies: withFactor(baseReplies, 1),
+      reposts: withFactor(baseReposts, 2),
+      likes: withFactor(baseLikes, 3),
+      views: withFactor(baseViews, 4),
     };
   };
 

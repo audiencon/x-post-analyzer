@@ -6,12 +6,13 @@ import { analyzePost } from '@/actions/analyze';
 import { getSuggestions } from '@/actions/suggestions';
 import type { AnalysisResult, AdvancedAnalytics } from '@/actions/analyze';
 import type { Suggestion } from '@/actions/suggestions';
-import { ApiKeyDialog } from '@/components/api-key-dialog';
 import { AnalysisSkeleton } from '@/components/analysis-skeleton';
+import { ApiKeyDialog } from '@/components/api-key-dialog';
 import Cookies from 'js-cookie';
 import { toast } from 'sonner';
-import { DEFAULT_MODEL, DEFAULT_API_KEY } from '@/config/openai';
+import { DEFAULT_MODEL } from '@/config/openai';
 import { cn } from '@/lib/utils';
+import { checkClientRateLimit } from '@/lib/rate-limit';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -28,20 +29,11 @@ import { InputSection } from './input-section';
 import { AnalysisDisplay } from './analysis-display';
 import { SuggestionsSection } from './suggestions-section';
 import { InspirationDialog } from '@/components/inspiration/InspirationDialog';
+import { showGenericError, showUsageLimitToast } from '@/lib/toast-helpers';
+import { MAX_LENGTH, MAX_REQUESTS, USAGE_STORAGE_KEY, WINDOW_MS } from '@/config/constants';
 
 // --- Rate Limiting Constants ---
-const MAX_REQUESTS = 10; // Max requests allowed
-const TIME_WINDOW_MS = 60 * 60 * 1000; // 1 hour in milliseconds
-const USAGE_STORAGE_KEY = 'apiUsageData';
-const MAX_LENGTH = 280; // X's character limit
 // --- End Constants ---
-
-// --- Usage Tracking Types ---
-interface UsageData {
-  count: number;
-  timestamp: number;
-}
-// --- End Types ---
 
 // --- Constants for Personalization ---
 const NICHES = [
@@ -102,51 +94,17 @@ export function AnalyzeForm() {
     setIsUsingDefaultKey(!savedApiKey);
   }, []);
 
-  // --- Rate Limiting Helpers ---
-  const getUsageData = (): UsageData | null => {
-    try {
-      const data = localStorage.getItem(USAGE_STORAGE_KEY);
-      return data ? JSON.parse(data) : null;
-    } catch (error) {
-      console.error('Error reading usage data from localStorage:', error);
-      return null;
-    }
-  };
-
-  const setUsageData = (data: UsageData): void => {
-    try {
-      localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(data));
-    } catch (error) {
-      console.error('Error saving usage data to localStorage:', error);
-    }
-  };
-
+  // --- Rate Limiting Helper ---
   const checkUsageLimit = (): boolean => {
-    const now = Date.now();
-    let usage = getUsageData();
-
-    // Reset if timestamp is outside the window or data is invalid
-    if (!usage || now - usage.timestamp > TIME_WINDOW_MS) {
-      usage = { count: 0, timestamp: now };
-    }
-
-    if (usage.count >= MAX_REQUESTS) {
-      // Limit exceeded
-      const timeLeft = Math.ceil((usage.timestamp + TIME_WINDOW_MS - now) / (60 * 1000));
-      toast.error(`Usage limit reached (${MAX_REQUESTS} requests per hour)`, {
-        description: `Please try again in ${timeLeft} minute(s).`,
-        className: 'bg-[#1a1a1a] border border-[#333] text-white',
-      });
-      return false;
-    } else {
-      // Allowed, increment count and update timestamp
-      usage.count += 1;
-      usage.timestamp = now; // Always update timestamp on allowed request
-      setUsageData(usage);
-      return true;
-    }
+    const res = checkClientRateLimit(USAGE_STORAGE_KEY, MAX_REQUESTS, WINDOW_MS);
+    if (res.allowed) return true;
+    showUsageLimitToast({
+      message: `Usage limit reached (${MAX_REQUESTS} requests per hour)`,
+      description: `Please try again in ${res.timeLeftMinutes} minute(s).`,
+    });
+    return false;
   };
-  // --- End Rate Limiting Helpers ---
+  // --- End Rate Limiting Helper ---
 
   const handleModelChange = (model: string) => {
     setSelectedModel(model);
@@ -178,30 +136,15 @@ export function AnalyzeForm() {
   };
 
   const handleAnalyze = async (text: string = content) => {
-    const currentApiKey = Cookies.get('openai-api-key') || DEFAULT_API_KEY;
-
     // Apply rate limit only when using the default API key
-    if (currentApiKey === DEFAULT_API_KEY) {
-      if (!checkUsageLimit()) return;
-    }
-
-    if (!currentApiKey) {
-      setShowApiKeyDialog(true);
-      return;
-    }
+    if (!checkUsageLimit()) return;
 
     setIsAnalyzing(true);
     setCurrentAnalyzing(text);
     setShowSuggestions(false);
     setSuggestions(null);
     try {
-      const result = await analyzePost(
-        text,
-        currentApiKey,
-        selectedNiche,
-        selectedGoal,
-        hasVisualContent
-      );
+      const result = await analyzePost(text, selectedNiche, selectedGoal, hasVisualContent);
       if (result) {
         setAnalysis(result);
         setContent(text);
@@ -210,10 +153,15 @@ export function AnalyzeForm() {
       console.error('Error analyzing post:', error);
       if (error instanceof Error && error.message.includes('API key')) {
         setShowApiKeyDialog(true);
+      } else if (error instanceof Error && error.message.includes('Usage limit reached')) {
+        showUsageLimitToast({
+          message: 'Usage limit reached',
+          description:
+            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
+        });
+      } else {
+        showGenericError('Failed to analyze post', 'Please try again or check your connection.');
       }
-      toast.error('Failed to analyze post', {
-        className: 'bg-[#1a1a1a] border border-[#333] text-white',
-      });
     } finally {
       setIsAnalyzing(false);
       setCurrentAnalyzing(null);
@@ -221,17 +169,8 @@ export function AnalyzeForm() {
   };
 
   const handleGetSuggestions = async () => {
-    const currentApiKey = Cookies.get('openai-api-key') || DEFAULT_API_KEY;
-
     // Apply rate limit only when using the default API key
-    if (currentApiKey === DEFAULT_API_KEY) {
-      if (!checkUsageLimit()) return;
-    }
-
-    if (!currentApiKey) {
-      setShowApiKeyDialog(true);
-      return;
-    }
+    if (!checkUsageLimit()) return;
 
     setIsGettingSuggestions(true);
     try {
@@ -252,37 +191,28 @@ export function AnalyzeForm() {
           }
         }
       }, 100); // Short delay after setting state
-      const result = await getSuggestions(
-        content,
-        currentApiKey,
-        selectedNiche,
-        selectedGoal,
-        hasVisualContent
-      );
+      const result = await getSuggestions(content, selectedNiche, selectedGoal, hasVisualContent);
       setSuggestions(result);
       setShowSuggestions(true);
     } catch (error) {
       console.error('Error getting suggestions:', error);
-      toast.error('Failed to get suggestions', {
-        className: 'bg-[#1a1a1a] border border-[#333] text-white',
-      });
+      if (error instanceof Error && error.message.includes('Usage limit reached')) {
+        showUsageLimitToast({
+          message: 'Usage limit reached',
+          description:
+            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
+        });
+      } else {
+        showGenericError('Failed to get suggestions', 'Please try again or check your connection.');
+      }
     } finally {
       setIsGettingSuggestions(false);
     }
   };
 
   const handleReanalyze = async (text: string) => {
-    const currentApiKey = Cookies.get('openai-api-key') || DEFAULT_API_KEY;
-
     // Apply rate limit only when using the default API key
-    if (currentApiKey === DEFAULT_API_KEY) {
-      if (!checkUsageLimit()) return;
-    }
-
-    if (!currentApiKey) {
-      setShowApiKeyDialog(true);
-      return;
-    }
+    if (!checkUsageLimit()) return;
 
     // Add check for valid text before proceeding
     if (!text || typeof text !== 'string' || text.trim() === '') {
@@ -313,8 +243,8 @@ export function AnalyzeForm() {
     try {
       // Run analysis and get suggestions in parallel
       const [analysisResult, suggestionsResult] = await Promise.all([
-        analyzePost(text, currentApiKey, selectedNiche, selectedGoal, hasVisualContent),
-        getSuggestions(text, currentApiKey, selectedNiche, selectedGoal, hasVisualContent),
+        analyzePost(text, selectedNiche, selectedGoal, hasVisualContent),
+        getSuggestions(text, selectedNiche, selectedGoal, hasVisualContent),
       ]);
 
       if (analysisResult) {
@@ -328,10 +258,15 @@ export function AnalyzeForm() {
       console.error('Error during reanalysis:', error);
       if (error instanceof Error && error.message.includes('API key')) {
         setShowApiKeyDialog(true);
+      } else if (error instanceof Error && error.message.includes('Usage limit reached')) {
+        showUsageLimitToast({
+          message: 'Usage limit reached',
+          description:
+            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
+        });
+      } else {
+        showGenericError('Failed to reanalyze post', 'Please try again or check your connection.');
       }
-      toast.error('Failed to reanalyze post', {
-        className: 'bg-[#1a1a1a] border border-[#333] text-white',
-      });
     } finally {
       setIsAnalyzing(false);
       setIsGettingSuggestions(false);
@@ -442,7 +377,7 @@ export function AnalyzeForm() {
                 showSuggestions={showSuggestions}
                 handleGetSuggestions={handleGetSuggestions}
                 isGettingSuggestions={isGettingSuggestions}
-                apiKey={Cookies.get('openai-api-key') || DEFAULT_API_KEY}
+                apiKey={Cookies.get('openai-api-key') || ''}
               />
             )}
           </AnimatePresence>

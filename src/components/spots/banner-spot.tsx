@@ -33,7 +33,27 @@ export function BannerSpot({ id, className }: BannerSpotProps) {
         <div className="flex items-center gap-2">
           <span className="text-xs text-[#71767b]">Ad</span>
           <span className="text-[#1d9bf0]">•</span>
-          {spot.logo && <Image src={spot.logo} alt={spot.data.title} width={24} height={24} />}
+          {!spot.available ? (
+            spot.logo && <Image src={spot.logo} alt={spot.data.title} width={24} height={24} />
+          ) : (
+            <div className="group relative size-8 shrink-0 cursor-pointer overflow-hidden rounded-full bg-[#2f3336] transition-colors hover:bg-[#2f3336]/80">
+              <div className="absolute inset-0 flex items-center justify-center">
+                <svg
+                  className="h-5 w-5 text-[#71767b]"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.5}
+                    d="M12 4.5v15m7.5-7.5h-15"
+                  />
+                </svg>
+              </div>
+            </div>
+          )}
           <span className="font-bold">
             {!spot.available ? spot.data.title : 'Want to be our sponsor?'}
           </span>

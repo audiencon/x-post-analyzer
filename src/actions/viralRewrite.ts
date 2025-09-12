@@ -1,7 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use server';
 
 import OpenAI from 'openai';
 import { DEFAULT_MODEL } from '@/config/openai'; // Assuming model config is here
+import { MAX_REQUESTS, WINDOW_MS } from '@/config/constants';
 
 /**
  * Calls OpenAI to rewrite text based on a detailed viral prompt.
@@ -12,11 +14,31 @@ import { DEFAULT_MODEL } from '@/config/openai'; // Assuming model config is her
  */
 export async function getViralRewrite(
   prompt: string,
-  apiKey: string,
   model: string = DEFAULT_MODEL
 ): Promise<string> {
+  const globalAny = global as any;
+  if (!globalAny.__viral_rewrite_usage__) {
+    globalAny.__viral_rewrite_usage__ = { count: 0, windowStart: Date.now() } as {
+      count: number;
+      windowStart: number;
+    };
+  }
+  const usage = globalAny.__viral_rewrite_usage__ as { count: number; windowStart: number };
+  const now = Date.now();
+  if (now - usage.windowStart > WINDOW_MS) {
+    usage.count = 0;
+    usage.windowStart = now;
+  }
+  if (usage.count >= MAX_REQUESTS) {
+    throw new Error(`Usage limit reached (${MAX_REQUESTS} requests per hour)`);
+  }
+  usage.count += 1;
+
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error('OpenAI API key is required.');
+    throw new Error(
+      'OpenAI API key is required. Please provide your API key or set OPENAI_API_KEY environment variable.'
+    );
   }
   if (!prompt) {
     throw new Error('Prompt cannot be empty.');

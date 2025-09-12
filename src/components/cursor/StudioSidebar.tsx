@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2, Lightbulb } from 'lucide-react';
 import type { Suggestion } from '@/actions/suggestions';
 import { assistantChat, type ChatHistoryMessage } from '@/actions/assistant';
-import { ScrollArea } from '../ui/scroll-area';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { MAX_REQUESTS } from '@/config/constants';
+import { InspirationDialog } from '@/components/inspiration/InspirationDialog';
+import { Textarea } from '@/components/ui/textarea';
 
 interface StudioSidebarProps {
   onInsert: (text: string) => void;
@@ -25,12 +27,13 @@ type ChatMessage =
   | { id?: string; role: 'assistant'; content: string; suggestions?: Suggestion[] };
 
 export function StudioSidebar({ onInsert }: StudioSidebarProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const streamingRef = useRef(false);
   const assistantIdRef = useRef<string | null>(null);
+  const [showInspiration, setShowInspiration] = useState(false);
 
   const examples = [
     'Suggest a tweet about building in public as an indie hacker',
@@ -38,6 +41,25 @@ export function StudioSidebar({ onInsert }: StudioSidebarProps) {
     'Create a thread about shipping fast and iterating quickly',
     'Tweet about coding tips for indie developers working on side projects',
   ];
+
+  // Available niches for inspiration
+  const availableNiches = [
+    'Tech',
+    'Marketing',
+    'SaaS',
+    'Creator',
+    'Writing',
+    'E-commerce',
+    'Finance',
+    'General',
+  ] as const;
+
+  const handleInspirationSelect = (text: string) => {
+    if (inputRef.current) {
+      inputRef.current.value = 'Create a draft tweet inspired by the post below.\n\n' + text;
+      inputRef.current.focus();
+    }
+  };
 
   const ask = async (query: string) => {
     if (!query.trim()) return;
@@ -100,12 +122,15 @@ export function StudioSidebar({ onInsert }: StudioSidebarProps) {
   }, [messages, loading]);
 
   return (
-    <div className="sticky top-4 flex h-[90vh] flex-col justify-between rounded-lg border border-white/10 bg-[#0b0b0b] p-3">
+    <div className="sticky top-4 flex h-[90vh] flex-col rounded-lg border border-white/10 bg-[#0b0b0b] p-3">
+      {/* Fixed header */}
+      <div className="mb-3 border-b border-gray-100/20 pb-3 text-base font-medium text-white">
+        Assistant
+      </div>
+
+      {/* Scrollable content area */}
       <div className="flex-1 overflow-hidden">
-        <div className="mb-3 border-b border-gray-100/20 py-3 text-base font-medium text-white">
-          Assistant
-        </div>
-        <ScrollArea className="h-[75vh] overflow-y-auto pr-1">
+        <ScrollArea className="h-full overflow-y-auto pr-1">
           <div className="mb-3 space-y-2">
             <div className="mb-3 text-xs font-medium text-white">Examples</div>
             {examples.map(example => (
@@ -158,23 +183,40 @@ export function StudioSidebar({ onInsert }: StudioSidebarProps) {
         </ScrollArea>
       </div>
 
-      <div>
-        <label className="mb-2 block text-sm text-white/60">Tweet about…</label>
+      {/* Fixed bottom input area */}
+      <div className="mt-3 border-t border-white/10 pt-3">
+        <div className="mb-2 flex items-center justify-between">
+          <label className="block text-sm text-white/60">Tweet about…</label>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowInspiration(true)}
+            className="h-6 px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white"
+          >
+            <Lightbulb className="mr-1 h-3 w-3" />
+            Inspiration
+          </Button>
+        </div>
         <div className="flex gap-2">
-          <input
+          <Textarea
             ref={inputRef}
-            type="text"
             placeholder="What do you want to write about?"
-            className="flex-1 rounded-md border border-white/10 bg-[#111] px-3 py-2 text-sm text-white placeholder:text-white/40 focus:ring-1 focus:ring-white/20 focus:outline-none"
-            onKeyDown={e => {
-              if (e.key === 'Enter') submit();
-            }}
+            className="field-sizing-content max-h-29.5 min-h-0 resize-none py-1.75"
           />
           <Button size="icon" variant="secondary" onClick={submit}>
             ↵
           </Button>
         </div>
       </div>
+
+      <InspirationDialog
+        open={showInspiration}
+        onClose={() => setShowInspiration(false)}
+        onExampleSelect={handleInspirationSelect}
+        initialNiche="Creator"
+        initialGoal=""
+        niches={availableNiches}
+      />
     </div>
   );
 }

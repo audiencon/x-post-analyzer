@@ -298,75 +298,6 @@ export function TipTapEditor({
           </button>
         </div>
       </div>
-
-      <BubbleMenu
-        editor={editor}
-        options={{
-          placement: 'top',
-        }}
-        shouldShow={({ from, to }) => {
-          // Only show when text is selected
-          return from !== to;
-        }}
-      >
-        <div className="flex items-center gap-1 rounded-lg border border-[#333] bg-[#0a0a0a] p-2 shadow-lg backdrop-blur-sm">
-          {/* AI Actions */}
-          {onAiAction && (
-            <div className="flex items-center gap-1">
-              <button
-                className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-                onClick={() => onAiAction('improve')}
-                disabled={loadingAction === 'improve'}
-                title="Improve clarity and engagement"
-              >
-                {loadingAction === 'improve' && (
-                  <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-                )}
-                <Type className="h-3 w-3" />
-                <span className="relative">Improve</span>
-              </button>
-              <button
-                className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-                onClick={() => onAiAction('extend')}
-                disabled={loadingAction === 'extend'}
-                title="Add details and examples"
-              >
-                {loadingAction === 'extend' && (
-                  <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-                )}
-                <MessageSquare className="h-3 w-3" />
-                <span className="relative">Extend</span>
-              </button>
-              <button
-                className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-                onClick={() => onAiAction('short')}
-                disabled={loadingAction === 'short'}
-                title="Make concise and punchy"
-              >
-                {loadingAction === 'short' && (
-                  <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-                )}
-                <Zap className="h-3 w-3" />
-                <span className="relative">Short</span>
-              </button>
-              <button
-                className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-                onClick={() => onAiAction('hook')}
-                disabled={loadingAction === 'hook'}
-                title="Create a strong hook"
-              >
-                {loadingAction === 'hook' && (
-                  <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-                )}
-                <Target className="h-3 w-3" />
-                <span className="relative">Hook</span>
-              </button>
-            </div>
-          )}
-        </div>
-      </BubbleMenu>
-
-      {/* Additional AI Actions Bubble Menu */}
       <BubbleMenu
         editor={editor}
         options={{
@@ -374,11 +305,59 @@ export function TipTapEditor({
         }}
         shouldShow={({ from, to }) => {
           // Show when text is selected and we have AI actions
-          return from !== to && !!onAiAction;
+          return from !== to;
         }}
       >
         <div className="flex items-center gap-1 rounded-lg border border-[#333] bg-[#0a0a0a] p-2 shadow-lg backdrop-blur-sm">
           <div className="flex items-center gap-1">
+            <button
+              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
+              onClick={() => onAiAction?.('improve')}
+              disabled={loadingAction === 'improve'}
+              title="Improve clarity and engagement"
+            >
+              {loadingAction === 'improve' && (
+                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
+              )}
+              <Type className="h-3 w-3" />
+              <span className="relative">Improve</span>
+            </button>
+            <button
+              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
+              onClick={() => onAiAction?.('extend')}
+              disabled={loadingAction === 'extend'}
+              title="Add details and examples"
+            >
+              {loadingAction === 'extend' && (
+                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
+              )}
+              <MessageSquare className="h-3 w-3" />
+              <span className="relative">Extend</span>
+            </button>
+            <button
+              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
+              onClick={() => onAiAction?.('short')}
+              disabled={loadingAction === 'short'}
+              title="Make concise and punchy"
+            >
+              {loadingAction === 'short' && (
+                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
+              )}
+              <Zap className="h-3 w-3" />
+              <span className="relative">Short</span>
+            </button>
+            <button
+              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
+              onClick={() => onAiAction?.('hook')}
+              disabled={loadingAction === 'hook'}
+              title="Create a strong hook"
+            >
+              {loadingAction === 'hook' && (
+                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
+              )}
+              <Target className="h-3 w-3" />
+              <span className="relative">Hook</span>
+            </button>
             <button
               className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
               onClick={() => onAiAction?.('punchy')}

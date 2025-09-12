@@ -645,8 +645,8 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
   };
 
   return (
-    <div className="flex h-[70vh] w-full max-w-5xl flex-col">
-      <ScrollArea className="h-[70vh] overflow-y-auto">
+    <div className="flex h-[90vh] w-full max-w-5xl flex-col">
+      <ScrollArea className="h-[100vh] overflow-y-auto">
         <div className="flex-1 space-y-3 p-3">
           {/* AI Changes Manager */}
           <AIChangesManager

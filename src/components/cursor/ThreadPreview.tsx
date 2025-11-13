@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
-import { Twitter, Edit2, X, Plus, Trash2 } from 'lucide-react';
+import { Edit2, X, Plus, Trash2 } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { TipTapEditor } from './TipTapEditor';
@@ -211,8 +211,8 @@ export function ThreadPreview({
   return (
     <div className={cn('rounded-lg border border-white/10 bg-[#0e0e0e] p-4', className)}>
       <div className="mb-3 flex items-center gap-2">
-        <Twitter className="h-4 w-4 text-[#1d9bf0]" />
-        <span className="text-xs font-medium text-white/70">X Preview</span>
+        <span className="text-sm">𝕏</span>
+        <span className="text-xs font-medium text-white/70">Preview</span>
         <span className="ml-auto flex items-center gap-2">
           <span className="text-xs text-white/40">
             {nonEmptyBlocks.length > 0
@@ -224,7 +224,7 @@ export function ThreadPreview({
               size="sm"
               variant="ghost"
               onClick={onAddBlock}
-              className="h-7 gap-1.5 px-2 text-xs text-white/60 hover:text-white"
+              className="h-7 gap-1.5 px-2 text-xs"
               disabled={busy}
               aria-label="Add new tweet to thread"
             >

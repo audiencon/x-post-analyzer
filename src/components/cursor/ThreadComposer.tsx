@@ -867,7 +867,7 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
             size="sm"
             variant="ghost"
             onClick={copyThread}
-            className="h-8 text-xs text-white/60 hover:text-white"
+            className="h-8 text-xs"
             disabled={!blocks.some(b => b.text.trim())}
           >
             <Copy className="h-3.5 w-3.5" />
@@ -877,7 +877,7 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
             size="sm"
             variant="ghost"
             onClick={downloadThread}
-            className="h-8 text-xs text-white/60 hover:text-white"
+            className="h-8 text-xs"
             disabled={!blocks.some(b => b.text.trim())}
           >
             <Download className="h-3.5 w-3.5" />

@@ -1,18 +1,12 @@
-/* eslint-disable react-hooks/exhaustive-deps */
 'use client';
 
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { TipTapEditor } from './TipTapEditor';
-import { AIChangesManager } from './AIChangesManager';
 import type { Editor } from '@tiptap/react';
 import { analyzePost } from '@/actions/analyze';
-import { getSuggestions } from '@/actions/suggestions';
 import { createAIChange, updateAIChange, type AIChange } from '@/lib/ai-changes-simple';
 import { createStream } from '@/lib/streaming';
 import type { AnalysisResult } from '@/actions/analyze';
-import type { Suggestion } from '@/actions/suggestions';
 import { toast } from 'sonner';
 import {
   sanitizeModelOutput,
@@ -22,10 +16,9 @@ import {
   setContentSafely,
   highlightEntireDoc,
 } from '@/lib/editor-helpers';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import spotsConfig from '@/config/spots.json';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { formatDuration, formatPrice } from '@/types/spots';
+import { ThreadPreview } from './ThreadPreview';
+import { ContentTemplates } from './ContentTemplates';
+import { Download, Copy } from 'lucide-react';
 
 interface Block {
   id: string;
@@ -34,15 +27,19 @@ interface Block {
 
 interface ThreadComposerProps {
   externalInsert?: string;
+  externalThread?: string[]; // Array of tweet texts for thread insertion
   onInserted?: () => void;
 }
 
-export function ThreadComposer({ externalInsert, onInserted }: ThreadComposerProps) {
+export function ThreadComposer({
+  externalInsert,
+  externalThread,
+  onInserted,
+}: ThreadComposerProps) {
   const [blocks, setBlocks] = useState<Block[]>([{ id: crypto.randomUUID(), text: '' }]);
   const [busy, setBusy] = useState(false);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [analysisById, setAnalysisById] = useState<Record<string, AnalysisResult | null>>({});
-  const [suggestionsById, setSuggestionsById] = useState<Record<string, Suggestion[] | null>>({});
   // TipTap manages its own refs
   const [selectionById, setSelectionById] = useState<
     Record<string, { start: number; end: number } | null>
@@ -52,34 +49,127 @@ export function ThreadComposer({ externalInsert, onInserted }: ThreadComposerPro
   >({});
   const [aiChanges, setAiChanges] = useState<AIChange[]>([]);
   const [editorRef, setEditorRef] = useState<Editor | null>(null);
-  const active = blocks[0]?.id ?? null;
+  const [editorRefsById, setEditorRefsById] = useState<Record<string, Editor>>({});
+  const previewEditorRefs = useRef<Record<string, Editor>>({});
+  const [activeBlockId, setActiveBlockId] = useState<string | null>(blocks[0]?.id ?? null);
+  const active = activeBlockId ?? blocks[0]?.id ?? null;
+  const processedThreadRef = useRef<string>('');
+  const processedInsertRef = useRef<string>('');
+  const isProcessingThreadRef = useRef<boolean>(false);
+  const isProcessingInsertRef = useRef<boolean>(false);
+  const prevExternalThreadRef = useRef<string | undefined>(undefined);
+  const prevExternalInsertRef = useRef<string | undefined>(undefined);
 
-  const spot = spotsConfig.spots.find(s => s.id === 'spot-cursor');
-  const url = spot?.available ? spot?.stripeUrl : spot?.data.url;
-
-  const update = (id: string, text: string) => {
+  const update = useCallback((id: string, text: string) => {
     setBlocks(prev => prev.map(b => (b.id === id ? { ...b, text } : b)));
+  }, []);
+
+  const addBlock = useCallback(() => {
+    const newBlock: Block = { id: crypto.randomUUID(), text: '' };
+    setBlocks(prev => [...prev, newBlock]);
+    // Set the new block as active
+    setActiveBlockId(newBlock.id);
+    // Scroll to the new block after a short delay to allow it to render
+    setTimeout(() => {
+      const blockElement = document.querySelector(`[data-block-id="${newBlock.id}"]`);
+      if (blockElement) {
+        blockElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
+  }, []);
+
+  const removeBlock = useCallback(
+    (id: string) => {
+      // Don't allow removing the last block if it's the only one
+      if (blocks.length <= 1) {
+        toast.error('Cannot remove the last tweet', {
+          description: 'You need at least one tweet in your thread.',
+          duration: 2000,
+        });
+        return;
+      }
+
+      setBlocks(prev => prev.filter(b => b.id !== id));
+      // Remove associated analysis
+      setAnalysisById(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      // Remove associated editor refs
+      setEditorRefsById(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      // Remove highlights
+      setHighlightsById(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      // Remove selection
+      setSelectionById(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      // Remove AI changes
+      setAiChanges(prev => prev.filter(c => c.blockId !== id));
+
+      // If the removed block was active, set the first remaining block as active
+      if (activeBlockId === id) {
+        const remainingBlocks = blocks.filter(b => b.id !== id);
+        if (remainingBlocks.length > 0) {
+          setActiveBlockId(remainingBlocks[0].id);
+        }
+      }
+    },
+    [blocks, activeBlockId]
+  );
+
+  const copyThread = () => {
+    const threadText = blocks
+      .filter(b => b.text.trim())
+      .map((b, idx) => `${idx + 1}/${blocks.filter(bl => bl.text.trim()).length} ${b.text}`)
+      .join('\n\n');
+    navigator.clipboard.writeText(threadText);
+    toast.success('Thread copied to clipboard', { duration: 2000 });
   };
 
-  const applySuggestion = (blockId: string, suggestion: string) => {
-    update(blockId, suggestion);
+  const downloadThread = () => {
+    const threadText = blocks
+      .filter(b => b.text.trim())
+      .map((b, idx) => `${idx + 1}/${blocks.filter(bl => bl.text.trim()).length} ${b.text}`)
+      .join('\n\n');
+    const blob = new Blob([threadText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `x-thread-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success('Thread downloaded', { duration: 2000 });
+  };
 
-    // Apply highlight to the applied suggestion
-    if (editorRef && blockId === active) {
-      editorRef.commands.setContent(suggestion);
-      editorRef.commands.selectAll();
-      editorRef.commands.setHighlight({ color: '#3b82f6' }); // Blue highlight for suggestions
-    }
-
-    toast.success('Suggestion applied', {
-      description: 'The suggestion has been added to your content.',
-      duration: 2000,
-    });
+  const applyTemplate = (template: string) => {
+    const targetId = active ?? blocks[0]?.id;
+    if (!targetId) return;
+    const current = blocks.find(b => b.id === targetId)?.text ?? '';
+    const next = current ? current + template : template;
+    update(targetId, next);
+    // Focus editor
+    setTimeout(() => {
+      editorRef?.commands.focus();
+    }, 100);
   };
 
   const applyTransform = async (
     id: string,
-    kind: 'improve' | 'extend' | 'short' | 'hook' | 'punchy' | 'clarify' | 'formal' | 'casual'
+    kind: 'improve' | 'extend' | 'short' | 'hook' | 'punchy' | 'clarify' | 'formal' | 'casual',
+    editorOverride?: Editor
   ) => {
     const block = blocks.find(b => b.id === id);
     if (!block) return;
@@ -140,10 +230,17 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
       const aiChange = createAIChange('modified', block.text, '', kind, id, 0, 0, true);
       setAiChanges(prev => [...prev, aiChange]);
 
+      // Get the correct editor for this block (prefer override, then preview, then main editor)
+      const blockEditor =
+        editorOverride ||
+        previewEditorRefs.current[id] ||
+        editorRefsById[id] ||
+        (id === active ? editorRef : null);
+
       // Clear the editor content and start streaming
-      if (editorRef) {
-        editorRef.commands.clearContent();
-        editorRef.commands.focus();
+      if (blockEditor) {
+        blockEditor.commands.clearContent();
+        blockEditor.commands.focus();
       }
 
       let streamedText = '';
@@ -166,23 +263,21 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
           );
 
           // Insert chunk into editor at current cursor position
-          if (editorRef) {
-            // (debugging removed)
-
+          if (blockEditor) {
             // Detect line breaks in different formats
             if (chunk.includes('\\n')) {
               // Handle explicit \n markers
               const parts = chunk.split('\\n');
               parts.forEach((part, index) => {
                 if (part) {
-                  editorRef.commands.insertContent(part);
+                  blockEditor.commands.insertContent(part);
                   // highlight each part
                   try {
                     if (part.trim().length > 0) {
-                      const { state } = editorRef;
+                      const { state } = blockEditor;
                       const to = state.selection.to;
                       const from = Math.max(1, to - part.length);
-                      editorRef
+                      blockEditor
                         .chain()
                         .focus()
                         .setTextSelection({ from, to })
@@ -193,31 +288,30 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
                   } catch {}
                 }
                 if (index < parts.length - 1) {
-                  editorRef.commands.enter();
+                  blockEditor.commands.enter();
                 }
               });
             } else if (shouldInsertLineBreak) {
               // Handle space after punctuation marks (likely line break)
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(true);
-              insertStreamLineBreak(editorRef);
+              insertStreamLineBreak(blockEditor);
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(false);
             } else if (chunk.trim() === '' && chunk.length > 0) {
               // Handle empty chunks that represent line breaks
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(true);
-              insertStreamLineBreak(editorRef);
+              insertStreamLineBreak(blockEditor);
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(false);
             } else {
-              editorRef.commands.insertContent(chunk);
+              blockEditor.commands.insertContent(chunk);
             }
-            // (debugging removed)
           }
         },
         onComplete: (fullText: string) => {
@@ -237,12 +331,19 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
           );
 
           // Replace editor content with sanitized text (preserving paragraphs), then highlight
-          if (editorRef) {
+          if (blockEditor) {
             // (debugging removed)
             try {
               const html = textToHtmlWithParagraphs(processedFinalText);
-              setContentSafely(editorRef, html);
-              highlightEntireDoc(editorRef);
+              setContentSafely(blockEditor, html);
+              highlightEntireDoc(blockEditor);
+
+              // Update highlights state for preview editor
+              const docSize = blockEditor.state.doc.content.size;
+              setHighlightsById(prev => ({
+                ...prev,
+                [id]: [{ start: 1, end: Math.max(1, docSize) }],
+              }));
             } catch {}
           }
 
@@ -254,8 +355,8 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
           setAiChanges(prev => prev.filter(c => c.id !== aiChange.id));
 
           // Restore original content on error
-          if (editorRef) {
-            editorRef.commands.setContent(base);
+          if (blockEditor) {
+            blockEditor.commands.setContent(base);
           }
 
           if (error.message.includes('Usage limit reached')) {
@@ -293,25 +394,154 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
     }
   };
 
+  // Handle external thread insertion (multiple tweets)
+  useEffect(() => {
+    // Create a stable key for comparison
+    const currentThreadKey = externalThread ? JSON.stringify(externalThread) : '';
+
+    // Only process if the content actually changed
+    if (prevExternalThreadRef.current === currentThreadKey) return;
+    prevExternalThreadRef.current = currentThreadKey;
+
+    // Reset ref when thread is cleared
+    if (!externalThread) {
+      if (processedThreadRef.current !== '') {
+        processedThreadRef.current = '';
+      }
+      isProcessingThreadRef.current = false;
+      return;
+    }
+
+    if (busy || externalThread.length === 0 || isProcessingThreadRef.current) return;
+
+    // Check if we've already processed this exact thread
+    if (processedThreadRef.current === currentThreadKey) return;
+
+    // Mark as processing to prevent concurrent executions
+    isProcessingThreadRef.current = true;
+    processedThreadRef.current = currentThreadKey;
+
+    // Clear existing blocks and create new ones for the thread
+    const newBlocks = externalThread.map(tweet => ({
+      id: crypto.randomUUID(),
+      text: tweet.trim(),
+    }));
+
+    setBlocks(newBlocks);
+
+    // Set first block as active
+    if (newBlocks.length > 0) {
+      setActiveBlockId(newBlocks[0].id);
+    }
+
+    // Clear old editor refs since we're replacing all blocks
+    setEditorRefsById({});
+    setEditorRef(null);
+
+    // Show success message
+    toast.success('Thread applied', {
+      description: `Applied ${externalThread.length} tweet${externalThread.length !== 1 ? 's' : ''} to composer.`,
+      duration: 3000,
+    });
+
+    // Call onInserted after a small delay to ensure state updates are complete
+    setTimeout(() => {
+      isProcessingThreadRef.current = false;
+      onInserted?.();
+    }, 100);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalThread, busy]);
+
   // Handle external insertions (e.g., from IdeasSidebar) without setting state during render
   useEffect(() => {
-    if (!externalInsert || busy) return;
-    const targetId = active ?? blocks[0]?.id;
-    if (!targetId) return;
-    const current = blocks.find(b => b.id === targetId)?.text ?? '';
-    const next = current ? current + '\n\n' + externalInsert : externalInsert;
-    update(targetId, next);
-    onInserted?.();
-  }, [externalInsert]);
+    // Only process if the content actually changed
+    if (prevExternalInsertRef.current === externalInsert) return;
+    prevExternalInsertRef.current = externalInsert;
+
+    // Reset ref when insert is cleared
+    if (!externalInsert) {
+      if (processedInsertRef.current !== '') {
+        processedInsertRef.current = '';
+      }
+      isProcessingInsertRef.current = false;
+      return;
+    }
+
+    if (busy || externalThread || isProcessingInsertRef.current) return; // Don't handle if thread is being inserted
+
+    // Check if we've already processed this exact insert
+    if (processedInsertRef.current === externalInsert) return;
+
+    // Mark as processing to prevent concurrent executions
+    isProcessingInsertRef.current = true;
+    processedInsertRef.current = externalInsert;
+
+    // Use a function to get current blocks state to avoid dependency issues
+    setBlocks(currentBlocks => {
+      const currentActive = currentBlocks[0]?.id ?? null;
+      const targetId = currentActive;
+      if (!targetId) {
+        isProcessingInsertRef.current = false;
+        return currentBlocks;
+      }
+
+      const currentBlock = currentBlocks.find(b => b.id === targetId);
+      if (!currentBlock) {
+        isProcessingInsertRef.current = false;
+        return currentBlocks;
+      }
+
+      // Replace the content instead of appending
+      const next = externalInsert;
+
+      // Replace all blocks with a single block containing the new content
+      const updatedBlocks = [{ id: targetId, text: next }];
+
+      // Clear all other state associated with removed blocks
+      setAnalysisById({});
+      setEditorRefsById(prev => {
+        const next = { ...prev };
+        // Keep only the target block's editor ref
+        Object.keys(next).forEach(key => {
+          if (key !== targetId) {
+            delete next[key];
+          }
+        });
+        return next;
+      });
+      setHighlightsById({});
+      setSelectionById({});
+      setAiChanges([]);
+      setActiveBlockId(targetId);
+
+      // Focus the editor after state update
+      setTimeout(() => {
+        const blockEditor = editorRefsById[targetId] || editorRef;
+        if (blockEditor) {
+          blockEditor.commands.focus();
+          blockEditor.commands.setTextSelection(blockEditor.state.doc.content.size);
+        }
+        isProcessingInsertRef.current = false;
+        onInserted?.();
+      }, 50);
+
+      return updatedBlocks;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalInsert, busy, externalThread]);
 
   const runAnalyzeBlock = async (id: string) => {
     const block = blocks.find(b => b.id === id);
-    if (!block || !block.text.trim()) return;
+    if (!block || !block.text.trim() || busy) return;
     setBusy(true);
     setLoadingAction('analyze');
     try {
       const res = await analyzePost(block.text);
       setAnalysisById(prev => ({ ...prev, [id]: res }));
+      toast.success('Analysis complete', {
+        description: 'Your post has been analyzed successfully.',
+        duration: 2000,
+      });
     } catch (error) {
       if (error instanceof Error && error.message.includes('Usage limit reached')) {
         toast.error('Usage limit reached', {
@@ -321,79 +551,47 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
         });
       } else {
         toast.error('Analysis failed', {
-          description: 'Please try again or check your connection.',
-          duration: 3000,
-        });
-      }
-    } finally {
-      setBusy(false);
-      setLoadingAction(null);
-    }
-  };
-
-  const runSuggestBlock = async (id: string) => {
-    const block = blocks.find(b => b.id === id);
-    if (!block || !block.text.trim()) return;
-    setBusy(true);
-    setLoadingAction('suggest');
-    try {
-      const res = await getSuggestions(block.text);
-      setSuggestionsById(prev => ({ ...prev, [id]: res }));
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('Usage limit reached')) {
-        toast.error('Usage limit reached', {
           description:
-            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
-          duration: 5000,
-        });
-      } else {
-        toast.error('Suggestions failed', {
-          description: 'Please try again or check your connection.',
+            error instanceof Error ? error.message : 'Please try again or check your connection.',
           duration: 3000,
         });
       }
+      // Clear any partial analysis on error
+      setAnalysisById(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     } finally {
       setBusy(false);
       setLoadingAction(null);
     }
-  };
-
-  const scoreSummary = (a?: AnalysisResult | null) => {
-    if (!a) return '—';
-    const s = a.scores;
-    return `E ${s.engagement} · F ${s.friendliness} · V ${s.virality}`;
-  };
-
-  const renderWithHighlights = (id: string, text: string) => {
-    const ranges = (highlightsById[id] ?? []).slice().sort((a, b) => a.start - b.start);
-    if (!ranges.length) return text;
-    const parts: React.ReactNode[] = [];
-    let cursor = 0;
-    ranges.forEach((r, idx) => {
-      const start = Math.max(0, Math.min(r.start, text.length));
-      const end = Math.max(0, Math.min(r.end, text.length));
-      if (start > cursor) {
-        parts.push(<span key={`t-${idx}-${cursor}`}>{text.slice(cursor, start)}</span>);
-      }
-      if (end > start) {
-        parts.push(
-          <span key={`h-${idx}-${start}`} className="bg-green-500/20">
-            {text.slice(start, end)}
-          </span>
-        );
-        cursor = end;
-      }
-    });
-    if (cursor < text.length) parts.push(<span key={`t-end-${cursor}`}>{text.slice(cursor)}</span>);
-    return parts;
   };
 
   const applyTransformToSelection = async (
     id: string,
-    kind: 'improve' | 'extend' | 'short' | 'hook' | 'punchy' | 'clarify' | 'formal' | 'casual'
+    kind: 'improve' | 'extend' | 'short' | 'hook' | 'punchy' | 'clarify' | 'formal' | 'casual',
+    editorOverride?: Editor
   ) => {
     const block = blocks.find(b => b.id === id);
-    const sel = selectionById[id];
+
+    // Get selection from editor if available, otherwise from state
+    let sel = selectionById[id];
+    if (editorOverride) {
+      const { from, to } = editorOverride.state.selection;
+      if (from !== to) {
+        sel = { start: from, end: to };
+      }
+    } else {
+      const previewEditor = previewEditorRefs.current[id];
+      if (previewEditor) {
+        const { from, to } = previewEditor.state.selection;
+        if (from !== to) {
+          sel = { start: from, end: to };
+        }
+      }
+    }
+
     if (!block || !sel || sel.end <= sel.start) {
       toast.error('No text selected', {
         description: 'Please select some text first, then click an action button.',
@@ -465,10 +663,17 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
       const aiChange = createAIChange('modified', target, '', kind, id, newStart, newStart, true);
       setAiChanges(prev => [...prev, aiChange]);
 
+      // Get the correct editor for this block (prefer override, then preview, then main editor)
+      const blockEditor =
+        editorOverride ||
+        previewEditorRefs.current[id] ||
+        editorRefsById[id] ||
+        (id === active ? editorRef : null);
+
       // Delete the selected text and prepare for streaming
-      if (editorRef) {
-        editorRef.commands.deleteRange({ from: sel.start, to: sel.end });
-        editorRef.commands.focus();
+      if (blockEditor) {
+        blockEditor.commands.deleteRange({ from: sel.start, to: sel.end });
+        blockEditor.commands.focus();
       }
 
       let streamedText = '';
@@ -491,47 +696,47 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
           );
 
           // Insert chunk into editor at current cursor position
-          if (editorRef) {
+          if (blockEditor) {
             // Detect line breaks in different formats
             if (chunk.includes('\\n')) {
               // Handle explicit \n markers
               const parts = chunk.split('\\n');
               parts.forEach((part, index) => {
                 if (part) {
-                  editorRef.commands.insertContent(part);
+                  blockEditor.commands.insertContent(part);
                 }
                 if (index < parts.length - 1) {
-                  editorRef.commands.enter();
+                  blockEditor.commands.enter();
                 }
               });
             } else if (shouldInsertLineBreak) {
               // Handle space after punctuation marks (likely line break)
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(true);
-              insertStreamLineBreak(editorRef);
+              insertStreamLineBreak(blockEditor);
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(false);
             } else if (chunk.trim() === '' && chunk.length > 0) {
               // Handle empty chunks that represent line breaks
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(true);
-              insertStreamLineBreak(editorRef);
+              insertStreamLineBreak(blockEditor);
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(false);
             } else {
               // Regular content
-              editorRef.commands.insertContent(chunk);
+              blockEditor.commands.insertContent(chunk);
               // Highlight the newly inserted range
               try {
                 if (chunk.length > 0 && chunk.trim().length > 0) {
-                  const { state } = editorRef;
+                  const { state } = blockEditor;
                   const to = state.selection.to;
                   const from = Math.max(1, to - chunk.length);
-                  editorRef
+                  blockEditor
                     .chain()
                     .focus()
                     .setTextSelection({ from, to })
@@ -562,12 +767,12 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
           );
 
           // Replace the streamed selection with sanitized text in the editor, then highlight that span
-          if (editorRef) {
+          if (blockEditor) {
             // (debugging removed)
             try {
               // Determine the streamed span by using caret and streamed length
               const streamedLength = streamedText.length;
-              const caretEnd = editorRef.state.selection.to;
+              const caretEnd = blockEditor.state.selection.to;
               const caretStart = Math.max(1, caretEnd - Math.max(0, streamedLength));
 
               // Build sanitized HTML from processed text
@@ -582,18 +787,24 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
 
               // Replace the streamed raw content with sanitized HTML
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(true);
-              editorRef.commands.setTextSelection({ from: caretStart, to: caretEnd });
-              editorRef.commands.insertContent(html);
+              blockEditor.commands.setTextSelection({ from: caretStart, to: caretEnd });
+              blockEditor.commands.insertContent(html);
               (
-                editorRef as unknown as { setContentSettingFlag?: (s: boolean) => void }
+                blockEditor as unknown as { setContentSettingFlag?: (s: boolean) => void }
               ).setContentSettingFlag?.(false);
 
               // Highlight the newly inserted sanitized span
-              const newEndSel = editorRef.state.selection.to;
+              const newEndSel = blockEditor.state.selection.to;
               const newStartSel = Math.max(1, newEndSel - processedFinalText.length);
-              applyHighlightRange(editorRef, newStartSel, newEndSel);
+              applyHighlightRange(blockEditor, newStartSel, newEndSel);
+
+              // Update highlights state for preview editor
+              setHighlightsById(prev => ({
+                ...prev,
+                [id]: [{ start: newStartSel, end: newEndSel }],
+              }));
             } catch {}
           }
 
@@ -605,8 +816,8 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
           setAiChanges(prev => prev.filter(c => c.id !== aiChange.id));
 
           // Restore original content on error
-          if (editorRef) {
-            editorRef.commands.setContent(block.text);
+          if (blockEditor) {
+            blockEditor.commands.setContent(block.text);
           }
 
           if (error.message.includes('Usage limit reached')) {
@@ -645,272 +856,162 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
   };
 
   return (
-    <div className="flex h-[90vh] w-full max-w-5xl flex-col">
-      <ScrollArea className="h-[100vh] overflow-y-auto">
-        <div className="flex-1 space-y-3 p-3">
-          {/* AI Changes Manager */}
-          <AIChangesManager
-            editor={editorRef}
-            changes={aiChanges}
-            onChangesUpdate={setAiChanges}
-            onRevertChange={(change, newText, highlights) => {
-              // Update the block text
-              update(change.blockId, newText);
-
-              // Update the editor content if it's the active block
-              if (editorRef && change.blockId === active) {
-                editorRef.commands.setContent(newText);
-                // Remove all highlights when reverting
-                editorRef.commands.unsetHighlight();
-              }
-
-              // Update highlights for this block
-              setHighlightsById(prev => ({
-                ...prev,
-                [change.blockId]: highlights,
-              }));
-            }}
-          />
-          {blocks.map(b => (
-            <div key={b.id} className="rounded-lg border border-[#2a2a2a] bg-[#111] p-2">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="flex h-full gap-3">
-                  {spot?.available ? (
-                    <Link
-                      href={url ?? ''}
-                      target="_blank"
-                      className="group relative h-10 w-10 shrink-0 cursor-pointer overflow-hidden rounded-full bg-[#2f3336] transition-colors hover:bg-[#2f3336]/80"
-                    >
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <svg
-                          className="h-5 w-5 text-[#71767b]"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.5}
-                            d="M12 4.5v15m7.5-7.5h-15"
-                          />
-                        </svg>
-                      </div>
-                    </Link>
-                  ) : (
-                    <Link
-                      href={url ?? ''}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="group relative h-10 w-10 shrink-0 cursor-pointer overflow-hidden rounded-full bg-[#2f3336] transition-transform hover:scale-105"
-                    >
-                      <Avatar className="size-10">
-                        <AvatarImage src={spot?.data?.avatar} alt={`@${spot?.data?.username}`} />
-                        <AvatarFallback>
-                          {(spot?.data?.name as string)?.substring(0, 2).toUpperCase() +
-                            spot?.data?.name?.substring(2)}
-                        </AvatarFallback>
-                      </Avatar>
-                    </Link>
-                  )}
-                  <div className="flex h-full min-w-0 flex-col justify-between">
-                    {/* Username and Handle */}
-                    <div className="flex items-center justify-between gap-2">
-                      {spot?.available ? (
-                        <Link
-                          href={url ?? ''}
-                          target="_blank"
-                          className="flex items-center gap-1 text-[15px]"
-                        >
-                          <span className="cursor-pointer font-bold text-[#1d9bf0] hover:underline">
-                            Want to be our sponsor? <br />
-                            {formatPrice(spot?.price ?? 0, 'USD')} for{' '}
-                            {formatDuration(spot?.duration ?? '30d')}
-                          </span>
-                        </Link>
-                      ) : (
-                        <div className="flex flex-col text-[15px]">
-                          <div className="flex items-center gap-1">
-                            <Link
-                              href={url ?? ''}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="font-bold text-white hover:underline"
-                            >
-                              {spot?.data?.name}
-                            </Link>
-                            {spot?.data?.verified && (
-                              <svg
-                                className="h-4 w-4 text-[#1d9bf0]"
-                                fill="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path d="M22.25 12c0-1.43-.88-2.67-2.19-3.34.46-1.39.2-2.9-.81-3.91s-2.52-1.27-3.91-.81c-.66-1.31-1.91-2.19-3.34-2.19s-2.67.88-3.33 2.19c-1.4-.46-2.91-.2-3.92.81s-1.26 2.52-.8 3.91c-1.31.67-2.2 1.91-2.2 3.34s.89 2.67 2.2 3.34c-.46 1.39-.21 2.9.8 3.91s2.52 1.26 3.91.81c.67 1.31 1.91 2.19 3.34 2.19s2.68-.88 3.34-2.19c1.39.45 2.9.2 3.91-.81s1.27-2.52.81-3.91c1.31-.67 2.19-1.91 2.19-3.34zm-11.71 4.2L6.8 12.46l1.41-1.42 2.26 2.26 4.8-5.23 1.47 1.36-6.2 6.77z" />
-                              </svg>
-                            )}
-
-                            <div className="ml-12 flex items-center gap-1 text-[13px] text-[#71767b]">
-                              <span>Ads</span>
-                              <svg className="h-3 w-3 fill-current" viewBox="0 0 24 24">
-                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-                              </svg>
-                            </div>
-                          </div>
-                          <Link
-                            href={url ?? ''}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[#71767b] hover:underline"
-                          >
-                            @{spot?.data?.username}
-                          </Link>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => runAnalyzeBlock(b.id)}
-                    className="relative bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow hover:from-purple-500 hover:to-fuchsia-500"
-                  >
-                    {loadingAction === 'analyze' && (
-                      <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-                    )}
-                    <span className="relative">Analyze</span>
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => runSuggestBlock(b.id)}
-                  >
-                    {loadingAction === 'suggest' && (
-                      <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-                    )}
-                    <span className="relative">Suggest</span>
-                  </Button>
-                </div>
-              </div>
-              <TipTapEditor
-                value={b.text}
-                suppressExternalSync={busy && b.id === active}
-                onChange={v => {
-                  update(b.id, v);
-                }}
-                onSelectionChange={(start, end) => {
-                  setSelectionById(prev => ({ ...prev, [b.id]: { start, end } }));
-                }}
-                onAiAction={kind => applyTransformToSelection(b.id, kind)}
-                onSlashCommand={command => {
-                  const cmd = command as
-                    | 'improve'
-                    | 'extend'
-                    | 'short'
-                    | 'hook'
-                    | 'punchy'
-                    | 'clarify'
-                    | 'formal'
-                    | 'casual';
-                  applyTransform(b.id, cmd);
-                }}
-                onEditorReady={editor => {
-                  if (b.id === active) {
-                    setEditorRef(editor);
-                  }
-                }}
-                loadingAction={loadingAction}
-                className="min-h-[120px] border-0 bg-[#0c0c0c] text-[16px] leading-7 text-white focus-visible:ring-0"
-                placeholder={`What's on your mind?
-Tip: type / to see actions`}
-              />
-              {(highlightsById[b.id]?.length ?? 0) > 0 && (
-                <div className="mt-2 rounded-md border border-[#2a2a2a] bg-[#0e0e0e] p-2 text-sm text-white/80">
-                  <div className="mb-1 text-xs text-white/50">Preview with highlights</div>
-                  <div className="max-h-[100px] overflow-scroll whitespace-pre-wrap">
-                    {renderWithHighlights(b.id, b.text)}
-                  </div>
-                </div>
-              )}
-              <div className="mt-2 grid gap-3 text-xs text-white/70">
-                {analysisById[b.id]?.analysis && (
-                  <div className="rounded-md border border-[#2a2a2a] bg-[#0e0e0e] p-2">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-white/60">Scores</div>
-                      <div className="font-medium">{scoreSummary(analysisById[b.id])}</div>
-                    </div>
-                    {analysisById[b.id]?.analysis?.synthesis ? (
-                      <div className="rounded bg-white/5 p-2 text-white/80">
-                        {analysisById[b.id]!.analysis.synthesis}
-                      </div>
-                    ) : null}
-
-                    <div className="mt-2 grid gap-2 md:grid-cols-3">
-                      <div>
-                        <div className="mb-1 text-white/50">Strengths</div>
-                        <ul className="space-y-1">
-                          {analysisById[b.id]!.analysis.strengths?.slice(0, 3).map((s, i) => (
-                            <li key={i} className="flex items-start gap-2">
-                              <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                              <span className="text-white/80">{s}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div>
-                        <div className="mb-1 text-white/50">Weaknesses</div>
-                        <ul className="space-y-1">
-                          {analysisById[b.id]!.analysis.weaknesses?.slice(0, 3).map((s, i) => (
-                            <li key={i} className="flex items-start gap-2">
-                              <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400" />
-                              <span className="text-white/80">{s}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div>
-                        <div className="mb-1 text-white/50">Recommendations</div>
-                        <ul className="space-y-1">
-                          {analysisById[b.id]!.analysis.recommendations?.slice(0, 3).map((s, i) => (
-                            <li key={i} className="flex items-start gap-2">
-                              <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-sky-400" />
-                              <span className="text-white/80">{s}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {suggestionsById[b.id]?.length ? (
-                  <div className="rounded-md border border-[#2a2a2a] bg-[#0e0e0e] p-2">
-                    <div className="mb-1 text-white/60">Suggestions</div>
-                    <ul className="space-y-1">
-                      {suggestionsById[b.id]!.slice(0, 3).map((s, idx) => (
-                        <li key={idx}>
-                          <button
-                            onClick={() => applySuggestion(b.id, s.text)}
-                            className="w-full rounded p-2 text-left text-sm text-white/80 transition-colors hover:bg-white/10 hover:text-white"
-                            title="Click to apply this suggestion"
-                          >
-                            <div className="flex items-start gap-2">
-                              <span className="mt-0.5 text-xs text-white/50">{idx + 1}.</span>
-                              <span className="flex-1">{s.text}</span>
-                            </div>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          ))}
+    <div className="flex w-full flex-col">
+      {/* Top Toolbar */}
+      <div className="mb-4 flex flex-col gap-3 rounded-lg border border-white/10 bg-[#0e0e0e] p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <ContentTemplates onSelect={applyTemplate} />
         </div>
-      </ScrollArea>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={copyThread}
+            className="h-8 text-xs text-white/60 hover:text-white"
+            disabled={!blocks.some(b => b.text.trim())}
+          >
+            <Copy className="h-3.5 w-3.5" />
+            <span className="ml-1.5">Copy</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={downloadThread}
+            className="h-8 text-xs text-white/60 hover:text-white"
+            disabled={!blocks.some(b => b.text.trim())}
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span className="ml-1.5">Download</span>
+          </Button>
+        </div>
+      </div>
+
+      {/* Preview Row - Always visible */}
+      <div className="mb-4">
+        <ThreadPreview
+          blocks={blocks}
+          activeBlockId={active}
+          busy={busy}
+          loadingAction={loadingAction}
+          highlightsById={highlightsById}
+          aiChanges={aiChanges}
+          analysisById={analysisById}
+          onAddBlock={addBlock}
+          onRemoveBlock={removeBlock}
+          onBlockChangesUpdate={(blockId, changes) => {
+            setAiChanges(changes);
+          }}
+          onBlockRevertChange={(blockId, change, newText, highlights) => {
+            // Update the block text
+            update(blockId, newText);
+
+            // Get the correct editor for this block (prefer preview editor)
+            const blockEditor =
+              previewEditorRefs.current[blockId] ||
+              editorRefsById[blockId] ||
+              (blockId === active ? editorRef : null);
+
+            // Update the editor content
+            if (blockEditor) {
+              blockEditor.commands.setContent(newText);
+              // Remove all highlights when reverting
+              blockEditor.commands.unsetHighlight();
+            }
+
+            // Update highlights for this block
+            setHighlightsById(prev => ({
+              ...prev,
+              [blockId]: highlights,
+            }));
+          }}
+          onBlockClick={blockId => {
+            // Set as active block
+            setActiveBlockId(blockId);
+
+            // Find the block index
+            const blockIndex = blocks.findIndex(b => b.id === blockId);
+            if (blockIndex === -1) return;
+
+            // Get the editor for this block
+            const blockEditor = editorRefsById[blockId] || (blockId === active ? editorRef : null);
+
+            // Focus the editor
+            if (blockEditor) {
+              blockEditor.commands.focus();
+              // Scroll the editor into view
+              const editorElement = blockEditor.view.dom as HTMLElement;
+              if (editorElement) {
+                editorElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            } else {
+              // If editor not ready, scroll to the block container
+              setTimeout(() => {
+                const blockElement = document.querySelector(`[data-block-id="${blockId}"]`);
+                if (blockElement) {
+                  blockElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  // Try to focus the editor after scroll
+                  setTimeout(() => {
+                    const editor = editorRefsById[blockId];
+                    if (editor) {
+                      editor.commands.focus();
+                    }
+                  }, 200);
+                }
+              }, 100);
+            }
+          }}
+          onBlockUpdate={(blockId, text) => {
+            // Update the block text
+            update(blockId, text);
+
+            // Update the editor content if it exists (in the main editor area)
+            const blockEditor = editorRefsById[blockId] || (blockId === active ? editorRef : null);
+            if (blockEditor) {
+              blockEditor.commands.setContent(text);
+            }
+          }}
+          onBlockAnalyze={blockId => {
+            runAnalyzeBlock(blockId);
+          }}
+          onBlockSelectionChange={(blockId, start, end) => {
+            setSelectionById(prev => ({ ...prev, [blockId]: { start, end } }));
+          }}
+          onBlockSlashCommand={(blockId, command, editor) => {
+            const cmd = command as
+              | 'improve'
+              | 'extend'
+              | 'short'
+              | 'hook'
+              | 'punchy'
+              | 'clarify'
+              | 'formal'
+              | 'casual';
+            // Store preview editor ref if provided
+            if (editor) {
+              previewEditorRefs.current[blockId] = editor;
+            }
+            applyTransform(blockId, cmd, editor);
+          }}
+          onBlockAiAction={(blockId, kind, editor) => {
+            const actionKind = kind as
+              | 'improve'
+              | 'extend'
+              | 'short'
+              | 'hook'
+              | 'punchy'
+              | 'clarify'
+              | 'formal'
+              | 'casual';
+            // Store preview editor ref if provided
+            if (editor) {
+              previewEditorRefs.current[blockId] = editor;
+            }
+            applyTransformToSelection(blockId, actionKind, editor);
+          }}
+        />
+      </div>
+
+      {/* Analysis and Suggestions - shown below preview */}
     </div>
   );
 }

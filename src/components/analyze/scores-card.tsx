@@ -2,7 +2,7 @@
 
 import { motion, useMotionValue, useTransform, animate, useInView } from 'framer-motion';
 import { Progress } from '@/components/ui/progress';
-import { BookOpen, Smile, Clock, Hash, Users, Sparkles, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { BookOpen, Smile, Clock, Users, Sparkles, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import ReactConfetti from 'react-confetti';
 
@@ -130,7 +130,7 @@ export function ScoresCard({ scores, analytics, content, analysis }: ScoresCardP
       >
         {/* Gradient background overlay */}
         <div
-          className={`absolute inset-0 bg-gradient-to-br ${getGradientColors(
+          className={`absolute inset-0 bg-linear-to-br ${getGradientColors(
             globalScore
           )} opacity-30 blur-xl`}
         />
@@ -143,7 +143,7 @@ export function ScoresCard({ scores, analytics, content, analysis }: ScoresCardP
             animate={{ scale: 1, opacity: 1 }}
             transition={{ delay: 0.2, type: 'spring' }}
           >
-            <div className="bg-gradient-to-r from-white to-gray-400 bg-clip-text text-6xl font-bold text-transparent">
+            <div className="bg-linear-to-r from-white to-gray-400 bg-clip-text text-6xl font-bold text-transparent">
               <motion.span>{rounded}</motion.span>%
             </div>
             <div className="mt-2 text-sm tracking-widest text-white/60">Global Score</div>
@@ -313,19 +313,6 @@ export function ScoresCard({ scores, analytics, content, analysis }: ScoresCardP
                   {analytics.timing.bestTime} {analytics.timing.timezone}
                   <br />
                   Peak days: {analytics.timing.peakDays.join(', ')}
-                </div>
-              </div>
-            </div>
-
-            {/* Hashtags */}
-            <div className="flex items-start gap-3">
-              <Hash className="mt-1 h-5 w-5 shrink-0 text-purple-400" />
-              <div>
-                <div className="mb-1 font-medium text-white">Recommended Hashtags</div>
-                <div className="text-sm text-gray-400">
-                  {analytics.hashtags.recommended.join(' ')}
-                  <br />
-                  {analytics.hashtags.reach}
                 </div>
               </div>
             </div>

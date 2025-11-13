@@ -140,6 +140,7 @@ You are a powerful, agentic AI content assistant operating inside PostRoast Stud
 1) Keep replies short and purposeful. Lead with the answer. Use light, non-cringe emojis sparingly.
 2) Stay on the tweet-writing task. Avoid unrelated topics.
 3) Prefer concrete language and skimmable formatting (short lines, line breaks).
+4) When generating a thread (multiple tweets), separate each tweet with "---" on its own line. Format: "Tweet 1 content\n\n---\n\nTweet 2 content\n\n---\n\nTweet 3 content"
 
 <available_tools>
   <tool>
@@ -192,4 +193,5 @@ export const editToolSystemPrompt = (): string => `You are an agentic AI editor 
 - Output ONLY the tweet; never explain.
 - No hashtags/links unless asked. Match user tone. Use short lines.
 - Default to single tweet unless a thread is specified.
+- When generating a thread (multiple tweets), separate each tweet with "---" on its own line between newlines. Format: "Tweet 1 content\n\n---\n\nTweet 2 content\n\n---\n\nTweet 3 content"
 </general_rules>`;

@@ -149,6 +149,7 @@ export function TipTapEditor({
 }: TipTapEditorProps) {
   type EditorWithFlag = Editor & { setContentSettingFlag?: (setting: boolean) => void };
   const isSettingContent = useRef(false);
+  const lastSyncedValue = useRef<string>(value);
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -169,7 +170,12 @@ export function TipTapEditor({
     onUpdate: ({ editor }) => {
       // Only update if we're not in the middle of setting content
       if (!isSettingContent.current) {
-        onChange(editor.getText());
+        const newText = editor.getText();
+        // Only call onChange if the text actually changed
+        if (newText !== lastSyncedValue.current) {
+          lastSyncedValue.current = newText;
+          onChange(newText);
+        }
       }
     },
     editorProps: {
@@ -183,19 +189,39 @@ export function TipTapEditor({
   useEffect(() => {
     if (!editor) return;
     if (suppressExternalSync) return; // don't override while streaming
+    if (isSettingContent.current) return; // don't sync if we're setting content internally
+
+    // Normalize for comparison (ignore whitespace differences)
     const normalize = (t: string) => t.replace(/\s+/g, ' ').trim();
     const current = normalize(editor.getText());
     const next = normalize(value.replace(/\n/g, ' '));
-    if (current === next) return;
+
+    // Only sync if the value actually changed from an external source
+    // (not from our own onChange callback)
+    if (current === next || value === lastSyncedValue.current) {
+      return;
+    }
+
+    // Set the flag to prevent onChange from triggering
+    isSettingContent.current = true;
+    lastSyncedValue.current = value;
 
     if (!value) {
       editor.commands.clearContent();
+      isSettingContent.current = false;
       return;
     }
 
     const html = textToHtmlWithParagraphs(value);
 
-    editor.commands.setContent(html);
+    // Use setContent with emitUpdate: false to prevent onChange
+    // Note: setContent will clear history, but this is only for external updates
+    editor.commands.setContent(html, { emitUpdate: false });
+
+    // Reset flag after a small delay to allow the content to be set
+    setTimeout(() => {
+      isSettingContent.current = false;
+    }, 0);
   }, [value, editor, suppressExternalSync]);
 
   useEffect(() => {

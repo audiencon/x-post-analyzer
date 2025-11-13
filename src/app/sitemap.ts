@@ -10,16 +10,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     {
       url: baseUrl,
       lastModified: new Date(),
-      changeFrequency: 'weekly', // Using a valid literal type
-      priority: 1, // Priority for the home page
+      changeFrequency: 'weekly',
+      priority: 1,
     },
-    // Add other static pages here if needed, e.g.:
-    // {
-    //   url: `${baseUrl}/about`,
-    //   lastModified: new Date(),
-    //   changeFrequency: 'monthly',
-    //   priority: 0.8,
-    // },
+    {
+      url: `${baseUrl}/cursor`,
+      lastModified: new Date(),
+      changeFrequency: 'weekly',
+      priority: 0.9,
+    },
   ];
 
   // Example for dynamic pages (if you had a blog):

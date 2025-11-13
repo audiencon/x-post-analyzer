@@ -50,7 +50,8 @@ export function setContentSafely(editor: Editor, html: string) {
   (editor as unknown as { setContentSettingFlag?: (s: boolean) => void }).setContentSettingFlag?.(
     true
   );
-  editor.commands.setContent(html);
+  // Use emitUpdate: false to prevent onChange
+  editor.commands.setContent(html, { emitUpdate: false });
   (editor as unknown as { setContentSettingFlag?: (s: boolean) => void }).setContentSettingFlag?.(
     false
   );

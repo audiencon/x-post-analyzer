@@ -118,7 +118,40 @@
       }
     },
     {
-      "id": "spot-cursor",
+      "id": "spot-cursor-1",
+      "price": 129,
+      "duration": "30d",
+      "available": false,
+      "startDate": "2024-04-20",
+      "endDate": "2024-05-19",
+      "stripeUrl": "https://buy.stripe.com/bJefZgalF3v1eTh5fW5AQ05",
+      "data": {
+        "name": "Audiencon⚡️",
+        "username": "audiencon",
+        "avatar": "https://pbs.twimg.com/profile_images/1649411092286779393/978ESXXj_400x400.jpg",
+        "bio": "<p>Passionate about using technology to create positive change.</p><ul><li><a href='http://anythingbwimages.app'>🫟 anythingbwimages</a></li><li><a href='http://synapt.app'>⭐️ synapt</a></li><li><a href='http://postroast.app'>💭 postroast</a></li><li><a href='http://helpkoder.com'>🔥 helpkoder</a></li><li><a href='http://animstats.com'>⚡️ animstats</a></li></ul>",
+        "verified": true,
+        "url": "https://x.com/audiencon"
+      }
+    },
+    {
+      "id": "spot-cursor-2",
+      "price": 129,
+      "duration": "30d",
+      "available": true,
+      "startDate": "2024-04-20",
+      "endDate": "2024-05-19",
+      "stripeUrl": "https://buy.stripe.com/bJefZgalF3v1eTh5fW5AQ05",
+      "data": {
+        "name": "Jitesh 🔺",
+        "username": "JiteshGhanchi",
+        "avatar": "https://pbs.twimg.com/profile_images/1896948634303746048/WBr5OM8T_400x400.jpg",
+        "verified": true,
+        "url": "https://x.com/JiteshGhanchi"
+      }
+    },
+    {
+      "id": "spot-cursor-3",
       "price": 129,
       "duration": "30d",
       "available": true,

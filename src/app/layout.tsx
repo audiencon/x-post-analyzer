@@ -12,7 +12,7 @@ const inter = Inter({
 });
 
 const baseUrl = 'https://postroast.app';
-const ogImageUrl = `${baseUrl}/og.png`;
+const ogImageUrl = `${baseUrl}/opengraph-image`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),

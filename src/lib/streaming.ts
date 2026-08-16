@@ -13,7 +13,7 @@ export class AIStream {
     this.controller = new AbortController();
   }
 
-  async streamResponse(prompt: string, apiKey?: string): Promise<string> {
+  async streamResponse(prompt: string): Promise<string> {
     this.isStreaming = true;
     this.fullText = '';
 
@@ -25,13 +25,13 @@ export class AIStream {
         },
         body: JSON.stringify({
           prompt,
-          apiKey,
         }),
         signal: this.controller.signal,
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `HTTP error! status: ${response.status}`);
       }
 
       const reader = response.body?.getReader();

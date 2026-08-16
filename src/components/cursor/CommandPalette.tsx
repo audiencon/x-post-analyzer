@@ -19,6 +19,7 @@ interface CommandPaletteProps {
 
 export function CommandPalette({ open, onOpenChange, actions }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -29,47 +30,67 @@ export function CommandPalette({ open, onOpenChange, actions }: CommandPalettePr
   }, [actions, query]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        onOpenChange(!open);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onOpenChange]);
+    setActive(0);
+  }, [query, open]);
+
+  useEffect(() => {
+    if (!open) setQuery('');
+  }, [open]);
+
+  const run = (action: CommandAction) => {
+    onOpenChange(false);
+    action.onRun();
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-2 border-[#333] bg-[#101010] p-0 text-white sm:max-w-lg">
-        <div className="border-b border-[#222] p-2">
+      <DialogContent
+        showCloseButton={false}
+        className="gap-0 overflow-hidden rounded-none border-white/10 bg-[oklch(0.16_0.014_50)] p-0 text-[oklch(0.93_0.015_80)] sm:max-w-lg"
+      >
+        <div className="border-b border-white/8 px-4 py-3">
           <Input
-            placeholder="Type a command... (Ctrl/Cmd+K)"
+            placeholder="Go to…"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            className="border-0 bg-[#0c0c0c] text-sm text-white placeholder:text-white/40 focus-visible:ring-0"
+            onKeyDown={e => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActive(i => Math.min(filtered.length - 1, i + 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActive(i => Math.max(0, i - 1));
+              } else if (e.key === 'Enter' && filtered[active]) {
+                e.preventDefault();
+                run(filtered[active]);
+              }
+            }}
+            className="h-8 border-0 bg-transparent px-0 text-base text-[oklch(0.93_0.015_80)] shadow-none placeholder:text-white/30 focus-visible:ring-0"
           />
         </div>
-        <div className="max-h-72 overflow-y-auto">
-          {filtered.map(action => (
+        <div className="max-h-72 overflow-y-auto py-1">
+          {filtered.map((action, index) => (
             <button
               key={action.id}
-              onClick={() => {
-                onOpenChange(false);
-                action.onRun();
-              }}
-              className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-white/5"
+              onClick={() => run(action)}
+              onMouseEnter={() => setActive(index)}
+              className={`flex w-full items-baseline justify-between px-4 py-2.5 text-left text-sm ${
+                index === active ? 'bg-white/6 text-white' : 'text-white/70'
+              }`}
             >
               <span>{action.title}</span>
-              {action.hint && <span className="text-xs text-white/40">{action.hint}</span>}
+              {action.hint ? (
+                <span className="ml-4 text-[11px] tracking-wide text-white/30 uppercase">
+                  {action.hint}
+                </span>
+              ) : null}
             </button>
           ))}
-          {filtered.length === 0 && (
-            <div className="px-3 py-6 text-center text-sm text-white/50">No commands</div>
-          )}
+          {filtered.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-white/35">Nothing matches.</div>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>
   );
 }
-

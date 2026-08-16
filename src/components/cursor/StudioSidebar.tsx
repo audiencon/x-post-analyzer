@@ -1,36 +1,34 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Button } from '@/components/ui/button';
-import {
-  ArrowLeft,
-  Loader2,
-  Lightbulb,
-  Copy,
-  Trash2,
-  RefreshCw,
-  Sparkles,
-  User,
-  Bot,
-  X,
-} from 'lucide-react';
 import type { Suggestion } from '@/actions/suggestions';
-import { assistantChat, type ChatHistoryMessage } from '@/actions/assistant';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import type { CritiqueHistoryMessage } from '@/lib/critique';
+import { streamCritiqueText } from '@/lib/stream-critique';
 import { cn } from '@/lib/utils';
-import { MAX_REQUESTS } from '@/config/constants';
 import { InspirationDialog } from '@/components/inspiration/InspirationDialog';
 import { Textarea } from '@/components/ui/textarea';
 import { parseThread, isThread } from '@/lib/thread-parser';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { extractPostFromNote } from '@/lib/editor-helpers';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
+import { InkScore } from '@/components/tool/ink-score';
+import { FlagList } from '@/components/analyze/desk-flags';
+import type { DraftDesk } from '@/lib/x-monetization';
 
 interface StudioSidebarProps {
   onInsert: (text: string) => void;
   onInsertThread?: (tweets: string[]) => void;
+  draftText?: string;
+  roast?: string;
+  scores?: {
+    engagement: number;
+    friendliness: number;
+    virality: number;
+  };
+  desk?: DraftDesk;
+  goal?: string;
 }
 
 function generateId(): string {
@@ -53,7 +51,10 @@ type ChatMessage =
 const markdownComponents: Components = {
   p: ({ ...props }) => <p className="mb-2 last:mb-0" {...props} />,
   a: ({ ...props }) => (
-    <a className="text-[#1d9bf0] underline hover:text-[#1d9bf0]/80" {...props} />
+    <a
+      className="text-[oklch(0.72_0.16_28)] underline decoration-white/20 hover:text-[oklch(0.8_0.16_28)]"
+      {...props}
+    />
   ),
   ul: ({ ...props }) => <ul className="mb-2 ml-4 list-disc space-y-1" {...props} />,
   ol: ({ ...props }) => <ol className="mb-2 ml-4 list-decimal space-y-1" {...props} />,
@@ -74,7 +75,15 @@ const markdownComponents: Components = {
   ),
 };
 
-export function StudioSidebar({ onInsert, onInsertThread }: StudioSidebarProps) {
+export function StudioSidebar({
+  onInsert,
+  onInsertThread,
+  draftText,
+  roast,
+  scores,
+  desk,
+  goal,
+}: StudioSidebarProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -87,49 +96,21 @@ export function StudioSidebar({ onInsert, onInsertThread }: StudioSidebarProps) 
 
   const examples = [
     {
-      icon: '',
-      text: 'Suggest a tweet about building in public as an indie hacker',
-      category: 'Creator',
+      text: 'Roast this draft like a reply guy who actually writes',
     },
     {
-      icon: '',
-      text: 'Draft 2 tweets on marketing strategies for indie projects',
-      category: 'Marketing',
+      text: 'Give me two openings that would stop the scroll',
     },
     {
-      icon: '',
-      text: 'Create a thread about shipping fast and iterating quickly',
-      category: 'Tech',
+      text: 'Turn this into a three-post thread with a closer',
     },
     {
-      icon: '',
-      text: 'Tweet about coding tips for indie developers working on side projects',
-      category: 'Tech',
+      text: 'Cut the fluff. Keep the line I would actually post',
     },
   ];
 
-  // Available niches for inspiration
-  const availableNiches = [
-    'Tech',
-    'Marketing',
-    'SaaS',
-    'Creator',
-    'Writing',
-    'E-commerce',
-    'Finance',
-    'General',
-  ] as const;
-
   const handleInspirationSelect = (text: string) => {
-    const prompt = 'Create a draft tweet inspired by the post below.\n\n' + text;
-    setInputValue(prompt);
-    if (inputRef.current) {
-      inputRef.current.value = prompt;
-      inputRef.current.focus();
-      // Auto-resize textarea
-      inputRef.current.style.height = 'auto';
-      inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
-    }
+    onInsert(extractPostFromNote(text));
   };
 
   const copyMessage = useCallback((content: string) => {
@@ -142,10 +123,50 @@ export function StudioSidebar({ onInsert, onInsertThread }: StudioSidebarProps) 
     toast.success('Conversation cleared', { duration: 2000 });
   }, []);
 
+  const writeAssistant = useCallback((content: string) => {
+    setMessages(prev => {
+      const next = [...prev];
+      const i = next.findIndex(m => m.id === assistantIdRef.current);
+      if (i >= 0 && next[i]?.role === 'assistant') {
+        next[i] = { ...next[i], content } as ChatMessage;
+      }
+      return next;
+    });
+    requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ block: 'end' });
+    });
+  }, []);
+
+  const runCritique = useCallback(
+    async (query: string, history: CritiqueHistoryMessage[]) => {
+      if (!query.trim() || streamingRef.current) return;
+
+      const id = generateId();
+      assistantIdRef.current = id;
+      setMessages(prev => [...prev, { id, role: 'assistant', content: '', timestamp: Date.now() }]);
+      setLoading(true);
+      streamingRef.current = true;
+
+      try {
+        await streamCritiqueText({ message: query, draftText, history }, writeAssistant);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error && error.message.toLowerCase().includes('limit reached')
+            ? error.message
+            : 'Failed to get response. Please try again.';
+        writeAssistant(errorMessage);
+      } finally {
+        streamingRef.current = false;
+        setLoading(false);
+        setIsRegenerating(false);
+      }
+    },
+    [draftText, writeAssistant]
+  );
+
   const regenerateLastResponse = useCallback(async () => {
     if (messages.length === 0 || loading || streamingRef.current) return;
 
-    // Find the last user message
     let lastUserMessageIndex = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'user') {
@@ -153,230 +174,44 @@ export function StudioSidebar({ onInsert, onInsertThread }: StudioSidebarProps) 
         break;
       }
     }
-
     if (lastUserMessageIndex === -1) return;
 
-    const lastUserMessage = messages[lastUserMessageIndex];
-    const query = lastUserMessage.content;
+    const query = messages[lastUserMessageIndex].content;
+    const history: CritiqueHistoryMessage[] = messages
+      .slice(0, lastUserMessageIndex + 1)
+      .map(m => ({ role: m.role, content: m.content }));
 
-    // Remove all messages after the last user message
     setMessages(prev => prev.slice(0, lastUserMessageIndex + 1));
-
     setIsRegenerating(true);
-    setLoading(true);
-    const id = generateId();
-    assistantIdRef.current = id;
-    setMessages(prev => [...prev, { id, role: 'assistant', content: '', timestamp: Date.now() }]);
-    streamingRef.current = true;
+    await runCritique(query, history);
+  }, [loading, messages, runCritique]);
 
-    const streamIntoAssistant = (chunk: string) => {
-      setMessages(prev => {
-        const next = [...prev];
-        const i = next.findIndex(m => m.id === assistantIdRef.current);
-        if (i >= 0 && next[i]?.role === 'assistant') {
-          const current = next[i] as ChatMessage;
-          next[i] = { ...current, content: (current.content || '') + chunk } as ChatMessage;
-        }
-        return next;
-      });
-      // Auto-scroll to bottom while streaming
-      requestAnimationFrame(() => {
-        const scrollArea = document.querySelector('[data-radix-scroll-area-viewport]');
-        if (scrollArea) {
-          scrollArea.scrollTop = scrollArea.scrollHeight;
-        } else if (endRef.current) {
-          endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
-      });
-    };
-
-    try {
-      const history: ChatHistoryMessage[] = messages.slice(0, lastUserMessageIndex + 1).map(m => ({
-        role: m.role,
-        content: m.content,
-      }));
-      const plan = await assistantChat(query, undefined, history);
-
-      const step = Math.max(4, Math.floor(plan.length / 80));
-      for (let i = 0; i < plan.length; i += step) {
-        if (!streamingRef.current) break;
-        streamIntoAssistant(plan.slice(i, Math.min(plan.length, i + step)));
-        await new Promise(res => setTimeout(res, 20));
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error && error.message.includes('Usage limit reached')
-          ? `Usage limit reached (${MAX_REQUESTS} requests per hour)`
-          : 'Failed to get response. Please try again.';
-
-      setMessages(prev => {
-        const next = [...prev];
-        const i = next.findIndex(m => m.id === assistantIdRef.current);
-        if (i >= 0 && next[i]?.role === 'assistant') {
-          next[i] = { ...next[i], content: errorMessage } as ChatMessage;
-        }
-        return next;
-      });
-    } finally {
-      streamingRef.current = false;
-      setLoading(false);
-      setIsRegenerating(false);
-    }
-  }, [messages, loading]);
-
-  const ask = async (query: string, isRegenerate = false) => {
+  const ask = async (query: string) => {
     if (!query.trim() || loading || streamingRef.current) return;
-
-    if (!isRegenerate) {
-      const userMessage: ChatMessage = {
-        role: 'user',
-        content: query,
-        timestamp: Date.now(),
-      };
-      setMessages(prev => [...prev, userMessage]);
-    }
-    setLoading(true);
-
-    // Insert a placeholder assistant message we will stream into
-    const id = generateId();
-    assistantIdRef.current = id;
-    setMessages(prev => [...prev, { id, role: 'assistant', content: '', timestamp: Date.now() }]);
-    streamingRef.current = true;
-
-    const streamIntoAssistant = (chunk: string) => {
-      setMessages(prev => {
-        const next = [...prev];
-        const i = next.findIndex(m => m.id === assistantIdRef.current);
-        if (i >= 0 && next[i]?.role === 'assistant') {
-          const current = next[i] as ChatMessage;
-          next[i] = { ...current, content: (current.content || '') + chunk } as ChatMessage;
-        }
-        return next;
-      });
-      // Auto-scroll to bottom while streaming
-      requestAnimationFrame(() => {
-        const scrollArea = document.querySelector('[data-radix-scroll-area-viewport]');
-        if (scrollArea) {
-          scrollArea.scrollTop = scrollArea.scrollHeight;
-        } else if (endRef.current) {
-          endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
-      });
-    };
-
-    try {
-      // Build compact history (without ids)
-      const history: ChatHistoryMessage[] = messages.map(m => ({
-        role: m.role,
-        content: m.content,
-      }));
-      // Fetch the assistant plan first with history for natural context
-      const plan = await assistantChat(query, undefined, history);
-
-      // Stream the plan text chunk-by-chunk for a typing effect
-      const step = Math.max(4, Math.floor(plan.length / 80));
-      for (let i = 0; i < plan.length; i += step) {
-        if (!streamingRef.current) break; // Allow cancellation
-        streamIntoAssistant(plan.slice(i, Math.min(plan.length, i + step)));
-        await new Promise(res => setTimeout(res, 20));
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error && error.message.includes('Usage limit reached')
-          ? `Usage limit reached (${MAX_REQUESTS} requests per hour)`
-          : 'Failed to get response. Please try again.';
-
-      setMessages(prev => {
-        const next = [...prev];
-        const i = next.findIndex(m => m.id === assistantIdRef.current);
-        if (i >= 0 && next[i]?.role === 'assistant') {
-          next[i] = { ...next[i], content: errorMessage } as ChatMessage;
-        }
-        return next;
-      });
-    } finally {
-      streamingRef.current = false;
-      setLoading(false);
-    }
+    const history: CritiqueHistoryMessage[] = messages.map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+    setMessages(prev => [...prev, { role: 'user', content: query, timestamp: Date.now() }]);
+    await runCritique(query, history);
   };
 
   const submit = useCallback(() => {
     const val = inputRef.current?.value?.trim() || inputValue.trim();
     if (!val || loading || streamingRef.current) return;
 
-    const userMessage: ChatMessage = {
-      role: 'user',
-      content: val,
-      timestamp: Date.now(),
-    };
-    setMessages(prev => [...prev, userMessage]);
+    const history: CritiqueHistoryMessage[] = messages.map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+    setMessages(prev => [...prev, { role: 'user', content: val, timestamp: Date.now() }]);
     setInputValue('');
     if (inputRef.current) {
       inputRef.current.value = '';
       inputRef.current.style.height = 'auto';
     }
-
-    setLoading(true);
-    const id = generateId();
-    assistantIdRef.current = id;
-    setMessages(prev => [...prev, { id, role: 'assistant', content: '', timestamp: Date.now() }]);
-    streamingRef.current = true;
-
-    const streamIntoAssistant = (chunk: string) => {
-      setMessages(prev => {
-        const next = [...prev];
-        const i = next.findIndex(m => m.id === assistantIdRef.current);
-        if (i >= 0 && next[i]?.role === 'assistant') {
-          const current = next[i] as ChatMessage;
-          next[i] = { ...current, content: (current.content || '') + chunk } as ChatMessage;
-        }
-        return next;
-      });
-      // Auto-scroll to bottom while streaming
-      requestAnimationFrame(() => {
-        const scrollArea = document.querySelector('[data-radix-scroll-area-viewport]');
-        if (scrollArea) {
-          scrollArea.scrollTop = scrollArea.scrollHeight;
-        } else if (endRef.current) {
-          endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
-      });
-    };
-
-    (async () => {
-      try {
-        const history: ChatHistoryMessage[] = messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        }));
-        const plan = await assistantChat(val, undefined, history);
-
-        const step = Math.max(4, Math.floor(plan.length / 80));
-        for (let i = 0; i < plan.length; i += step) {
-          if (!streamingRef.current) break;
-          streamIntoAssistant(plan.slice(i, Math.min(plan.length, i + step)));
-          await new Promise(res => setTimeout(res, 20));
-        }
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error && error.message.includes('Usage limit reached')
-            ? `Usage limit reached (${MAX_REQUESTS} requests per hour)`
-            : 'Failed to get response. Please try again.';
-
-        setMessages(prev => {
-          const next = [...prev];
-          const i = next.findIndex(m => m.id === assistantIdRef.current);
-          if (i >= 0 && next[i]?.role === 'assistant') {
-            next[i] = { ...next[i], content: errorMessage } as ChatMessage;
-          }
-          return next;
-        });
-      } finally {
-        streamingRef.current = false;
-        setLoading(false);
-      }
-    })();
-  }, [inputValue, loading, messages]);
+    void runCritique(val, history);
+  }, [inputValue, loading, messages, runCritique]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputValue(e.target.value);
@@ -423,13 +258,6 @@ export function StudioSidebar({ onInsert, onInsertThread }: StudioSidebarProps) 
     prevLoadingRef.current = loading;
   }, [messages, loading]);
 
-  // Auto-focus input on mount
-  useEffect(() => {
-    if (inputRef.current && messages.length === 0) {
-      inputRef.current.focus();
-    }
-  }, [messages.length]);
-
   const formatTime = (timestamp?: number) => {
     if (!timestamp) return '';
     const date = new Date(timestamp);
@@ -444,288 +272,237 @@ export function StudioSidebar({ onInsert, onInsertThread }: StudioSidebarProps) 
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const hasDraft = Boolean(draftText?.trim());
+
   return (
-    <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-[#0b0b0b] shadow-lg lg:sticky lg:top-4 lg:h-[calc(100vh-80px-57px-32px)] lg:max-h-[800px]">
-      {/* Fixed header */}
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div>
-            <h2 className="text-sm font-semibold text-white">AI Assistant</h2>
-            <p className="text-[10px] text-white/50">Get suggestions and draft content</p>
-          </div>
+    <div className="flex h-full min-h-0 flex-col bg-transparent">
+      <div className="flex items-baseline justify-between px-5 pt-6 pb-4">
+        <div>
+          <p className="text-[11px] tracking-[0.18em] text-white/35 uppercase">Critique</p>
+          <p className="mt-1 text-xs text-white/40">The red pen. Not a chat.</p>
         </div>
-        {messages.length > 0 && (
-          <Button
-            size="sm"
-            variant="ghost"
+        {messages.length > 0 ? (
+          <button
+            type="button"
             onClick={e => {
               e.preventDefault();
               e.stopPropagation();
               clearConversation();
             }}
-            className="h-7 w-7 p-0 text-white/60 hover:bg-white/10 hover:text-white"
-            aria-label="Clear conversation"
-            title="Clear conversation"
+            className="text-xs text-white/35 hover:text-white"
           >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-        )}
+            Clear
+          </button>
+        ) : null}
       </div>
 
-      {/* Scrollable content area */}
-      <div className="flex-1 overflow-hidden">
-        <ScrollArea className="h-full overflow-y-auto">
-          <div className="px-4 py-3" data-scroll-container>
-            {messages.length === 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="mb-4 space-y-2"
-              >
-                <div className="mb-3 flex items-center gap-2">
-                  <Sparkles className="h-3.5 w-3.5 text-white/60" />
-                  <div className="text-xs font-medium text-white/70">Quick Examples</div>
-                </div>
-                {examples.map((example, idx) => (
-                  <motion.button
+      {roast || scores || desk ? (
+        <div className="border-y border-white/8 px-5 py-6">
+          {goal ? (
+            <p className="mb-3 text-[11px] tracking-[0.16em] text-white/30 uppercase">{goal}</p>
+          ) : null}
+          {roast ? (
+            <p className="font-heading text-xl leading-snug text-[oklch(0.82_0.1_28)]">“{roast}”</p>
+          ) : null}
+          {scores ? (
+            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <InkScore
+                label="Engage"
+                value={scores.engagement}
+                sting={scores.engagement < 55}
+                compact
+              />
+              <InkScore
+                label="Warmth"
+                value={scores.friendliness}
+                sting={scores.friendliness < 55}
+                compact
+              />
+              <InkScore
+                label="Viral"
+                value={scores.virality}
+                sting={scores.virality < 55}
+                compact
+              />
+              {desk ? (
+                <InkScore label="Payout" value={desk.payout} sting={desk.payout < 55} compact />
+              ) : null}
+            </div>
+          ) : desk ? (
+            <div className="mt-6">
+              <InkScore label="Payout" value={desk.payout} sting={desk.payout < 55} compact />
+            </div>
+          ) : null}
+          {desk?.verdict ? (
+            <p className="mt-5 text-sm leading-6 text-white/50">{desk.verdict}</p>
+          ) : null}
+          {desk?.flags?.length ? <FlagList flags={desk.flags} /> : null}
+        </div>
+      ) : null}
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="px-5 py-4" data-scroll-container>
+          {messages.length === 0 && (
+            <div className="mb-2">
+              {hasDraft ? (
+                <p className="font-heading text-[1.05rem] leading-snug text-white/45">
+                  {draftText && draftText.length > 110 ? `${draftText.slice(0, 110)}…` : draftText}
+                </p>
+              ) : (
+                <p className="font-heading text-xl leading-snug text-white/28">
+                  Write the line first.
+                </p>
+              )}
+              <p className="mt-5 mb-3 text-[11px] tracking-[0.16em] text-white/30 uppercase">
+                Ask for
+              </p>
+              <div className="space-y-1">
+                {examples.map(example => (
+                  <button
                     key={example.text}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.05 }}
+                    type="button"
                     onClick={e => {
                       e.preventDefault();
                       e.stopPropagation();
                       ask(example.text);
                     }}
                     disabled={loading}
-                    className="group w-full rounded-lg border border-white/10 bg-[#111] px-3 py-2.5 text-left text-sm text-white/80 transition-all hover:border-white/20 hover:bg-white/10 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                    className="w-full py-2 text-left text-sm text-white/50 hover:text-white disabled:opacity-40"
                   >
-                    <div className="flex items-start gap-2.5">
-                      <span className="text-base">{example.icon}</span>
-                      <div className="flex-1">
-                        <div className="text-xs font-medium">{example.text}</div>
-                        <div className="mt-0.5 text-[10px] text-white/40">{example.category}</div>
-                      </div>
-                    </div>
-                  </motion.button>
+                    {example.text}
+                  </button>
                 ))}
-              </motion.div>
-            )}
-            <AnimatePresence>
-              {messages.map((m, idx) => {
-                const isLastAssistant = idx === messages.length - 1 && m.role === 'assistant';
-                return (
-                  <motion.div
-                    key={m.id || `msg-${idx}`}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    transition={{ duration: 0.2 }}
-                    className="group mb-4"
-                  >
-                    <div className="flex items-start gap-3">
-                      <Avatar className="h-8 w-8 shrink-0 ring-2 ring-white/10">
-                        <AvatarFallback
-                          className={cn(
-                            'text-xs',
-                            m.role === 'user'
-                              ? 'bg-[#1d9bf0] text-white'
-                              : 'bg-linear-to-br from-gray-800 to-black text-white'
-                          )}
-                        >
-                          {m.role === 'user' ? (
-                            <User className="h-4 w-4" />
-                          ) : (
-                            <span className="text-sm">𝕏</span>
-                          )}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0 flex-1">
-                        <div className="mb-1.5 flex items-center gap-2">
-                          <span className="text-xs font-semibold text-white">
-                            {m.role === 'user' ? 'You' : 'AI Assistant'}
-                          </span>
-                          {m.timestamp && (
-                            <span className="text-[10px] text-white/40">
-                              {formatTime(m.timestamp)}
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          className={cn(
-                            'relative rounded-lg border p-3 text-sm text-white/90',
-                            m.role === 'user'
-                              ? 'border-white/10 bg-[#111]'
-                              : 'border-emerald-500/20 bg-emerald-500/10'
-                          )}
-                        >
-                          {m.role === 'assistant' ? (
-                            <div className="prose prose-sm prose-invert max-w-none">
-                              <ReactMarkdown components={markdownComponents}>
-                                {m.content}
-                              </ReactMarkdown>
-                            </div>
-                          ) : (
-                            <div className="whitespace-pre-wrap">{m.content}</div>
-                          )}
-                          {/* Action buttons - show on hover */}
-                          <div className="absolute top-2 -right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                            {m.role === 'assistant' && m.content && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={e => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    copyMessage(m.content);
-                                  }}
-                                  className="h-6 w-6 p-0 text-white/60 hover:bg-white/10 hover:text-white"
-                                  aria-label="Copy message"
-                                  title="Copy"
-                                >
-                                  <Copy className="h-3 w-3" />
-                                </Button>
-                                {isLastAssistant && !loading && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={e => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      regenerateLastResponse();
-                                    }}
-                                    disabled={isRegenerating}
-                                    className="h-6 w-6 p-0 text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-50"
-                                    aria-label="Regenerate response"
-                                    title="Regenerate"
-                                  >
-                                    <RefreshCw
-                                      className={cn('h-3 w-3', isRegenerating && 'animate-spin')}
-                                    />
-                                  </Button>
-                                )}
-                              </>
-                            )}
-                            {m.role === 'user' && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={e => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  copyMessage(m.content);
-                                }}
-                                className="h-6 w-6 p-0 text-white/60 hover:bg-white/10 hover:text-white"
-                                aria-label="Copy message"
-                                title="Copy"
-                              >
-                                <Copy className="h-3 w-3" />
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                        {m.role === 'assistant' && !loading && m.content && (
-                          <div className="mt-2 flex items-center gap-2">
-                            {isThread(m.content) && onInsertThread ? (
-                              <Button
-                                size="sm"
-                                variant="default"
-                                onClick={e => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  const tweets = parseThread(m.content);
-                                  onInsertThread(tweets);
-                                }}
-                                className="h-8 gap-1.5 bg-linear-to-r from-emerald-600 to-emerald-500 text-xs font-medium text-white shadow-sm hover:from-emerald-500 hover:to-emerald-400"
-                                aria-label="Apply thread to composer"
-                              >
-                                <ArrowLeft className="h-3.5 w-3.5" />
-                                Apply Thread ({parseThread(m.content).length} tweets)
-                              </Button>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="default"
-                                onClick={e => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  onInsert(m.content);
-                                }}
-                                className="h-8 gap-1.5 bg-linear-to-r from-emerald-600 to-emerald-500 text-xs font-medium text-white shadow-sm hover:from-emerald-500 hover:to-emerald-400"
-                                aria-label="Apply this suggestion to the editor"
-                              >
-                                <ArrowLeft className="h-3.5 w-3.5" />
-                                Apply to Editor
-                              </Button>
-                            )}
-                          </div>
-                        )}
+              </div>
+            </div>
+          )}
+          <AnimatePresence>
+            {messages.map((m, idx) => {
+              const isLastAssistant = idx === messages.length - 1 && m.role === 'assistant';
+              return (
+                <div
+                  key={m.id || `msg-${idx}`}
+                  className={cn(
+                    'group mb-6',
+                    m.role === 'assistant' && 'border-l border-white/10 pl-3'
+                  )}
+                >
+                  <div className="mb-1.5 flex items-baseline justify-between gap-3">
+                    <p className="text-[11px] tracking-[0.16em] text-white/30 uppercase">
+                      {m.role === 'user' ? 'You' : 'Note'}
+                    </p>
+                    {m.timestamp ? (
+                      <span className="text-[10px] text-white/25">{formatTime(m.timestamp)}</span>
+                    ) : null}
+                  </div>
+                  <div className="relative text-sm leading-relaxed text-[oklch(0.9_0.015_80)]">
+                    {m.role === 'assistant' ? (
+                      <div className="prose prose-sm prose-invert max-w-none">
+                        <ReactMarkdown components={markdownComponents}>{m.content}</ReactMarkdown>
                       </div>
+                    ) : (
+                      <p className="whitespace-pre-wrap text-white/70">{m.content}</p>
+                    )}
+                    <div className="mt-2 flex items-center gap-3 text-xs text-white/35 opacity-0 transition-opacity group-hover:opacity-100">
+                      {m.content ? (
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            copyMessage(m.content);
+                          }}
+                        >
+                          Copy
+                        </button>
+                      ) : null}
+                      {isLastAssistant && !loading ? (
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            regenerateLastResponse();
+                          }}
+                          disabled={isRegenerating}
+                        >
+                          {isRegenerating ? 'Again…' : 'Again'}
+                        </button>
+                      ) : null}
                     </div>
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
-            {loading && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="mb-4 flex items-center gap-3"
-              >
-                <Avatar className="h-8 w-8 shrink-0 ring-2 ring-white/10">
-                  <AvatarFallback className="bg-linear-to-br from-emerald-500 to-emerald-600 text-white">
-                    <Bot className="h-4 w-4" />
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
-                  <span className="text-xs text-white/80">Thinking...</span>
+                  </div>
+                  {m.role === 'assistant' && !loading && m.content ? (
+                    <div className="mt-3">
+                      {isThread(m.content) && onInsertThread ? (
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onInsertThread(parseThread(m.content));
+                          }}
+                          className="text-sm text-[oklch(0.72_0.16_28)] hover:text-[oklch(0.8_0.16_28)]"
+                        >
+                          Use {parseThread(m.content).length} posts
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onInsert(extractPostFromNote(m.content));
+                          }}
+                          className="text-sm text-[oklch(0.72_0.16_28)] hover:text-[oklch(0.8_0.16_28)]"
+                        >
+                          Use this
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-              </motion.div>
-            )}
-            <div ref={endRef} />
-          </div>
-        </ScrollArea>
+              );
+            })}
+          </AnimatePresence>
+          {loading ? (
+            <p className="mb-4 text-xs tracking-wide text-white/40">Reading the draft…</p>
+          ) : null}
+          <div ref={endRef} />
+        </div>
       </div>
 
-      {/* Fixed bottom input area */}
-      <div className="border-t border-white/10 bg-[#0b0b0b] px-4 py-3">
-        <div className="mb-2 flex items-center justify-between">
-          <label className="text-xs font-medium text-white/70">Ask AI Assistant</label>
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={e => {
-                e.preventDefault();
-                e.stopPropagation();
-                setShowInspiration(true);
-              }}
-              className="h-7 px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white"
-            >
-              <Lightbulb className="mr-1.5 h-3.5 w-3.5" />
-              Inspiration
-            </Button>
-          </div>
+      <div className="border-t border-white/8 px-5 py-4">
+        <div className="mb-2 flex items-baseline justify-between">
+          <label className="text-[11px] tracking-[0.16em] text-white/35 uppercase">Ask</label>
+          <button
+            type="button"
+            onClick={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              setShowInspiration(true);
+            }}
+            className="text-xs text-white/35 hover:text-white"
+          >
+            Library
+          </button>
         </div>
         <div className="relative">
           <Textarea
             ref={inputRef}
             value={inputValue}
             onChange={handleInputChange}
-            placeholder="What do you want to write about? (Press Enter to send, Shift+Enter for new line)"
-            className="max-h-[120px] min-h-[44px] resize-none border-white/20 bg-[#111] pr-12 text-sm text-white placeholder:text-white/40 focus:border-[#1d9bf0]/50 focus:ring-[#1d9bf0]/20"
+            placeholder={
+              hasDraft ? 'Cut this. Open harder. Make it postable.' : 'What should this draft do?'
+            }
+            className="max-h-[140px] min-h-[88px] resize-none rounded-none border-white/10 bg-transparent pr-16 text-sm leading-relaxed text-[oklch(0.93_0.015_80)] placeholder:text-white/28 focus-visible:ring-0"
             onKeyDown={handleKeyDown}
             disabled={loading}
-            aria-label="Chat input"
-            rows={1}
+            aria-label="Critique note"
+            rows={3}
           />
-          <div className="absolute right-2 bottom-2 flex items-center gap-1">
-            {inputValue.length > 0 && (
-              <Button
-                size="sm"
-                variant="ghost"
+          <div className="absolute right-2 bottom-2 flex items-center gap-2">
+            {inputValue.length > 0 ? (
+              <button
+                type="button"
                 onClick={e => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -736,42 +513,26 @@ export function StudioSidebar({ onInsert, onInsertThread }: StudioSidebarProps) 
                     inputRef.current.focus();
                   }
                 }}
-                className="h-6 w-6 p-0 text-white/40 hover:bg-white/10 hover:text-white"
-                aria-label="Clear input"
-                title="Clear (Esc)"
+                className="text-xs text-white/30 hover:text-white"
               >
-                <X className="h-3 w-3" />
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="default"
+                Clear
+              </button>
+            ) : null}
+            <button
+              type="button"
               onClick={e => {
                 e.preventDefault();
                 e.stopPropagation();
                 submit();
               }}
               disabled={loading || !inputValue.trim()}
-              className="h-7 w-7 bg-linear-to-r from-[#1d9bf0] to-[#1d9bf0]/80 p-0 text-white shadow-sm hover:from-[#1d9bf0]/90 hover:to-[#1d9bf0]/70 disabled:opacity-50"
-              aria-label="Send message"
-              title="Send (Enter)"
+              className="text-sm text-[oklch(0.72_0.16_28)] hover:text-[oklch(0.8_0.16_28)] disabled:opacity-30"
             >
-              {loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ArrowLeft className="h-3.5 w-3.5 -rotate-45" />
-              )}
-            </Button>
+              {loading ? '…' : 'Send'}
+            </button>
           </div>
         </div>
-        <div className="mt-2 flex items-center justify-between text-[10px] text-white/40">
-          <span>Press Enter to send, Shift+Enter for new line</span>
-          {inputValue.length > 0 && (
-            <span className={cn(inputValue.length > 500 && 'text-orange-400')}>
-              {inputValue.length} characters
-            </span>
-          )}
-        </div>
+        <p className="mt-2 text-[10px] text-white/25">Enter to send · Shift+Enter for a line</p>
       </div>
 
       <InspirationDialog
@@ -779,8 +540,6 @@ export function StudioSidebar({ onInsert, onInsertThread }: StudioSidebarProps) 
         onClose={() => setShowInspiration(false)}
         onExampleSelect={handleInspirationSelect}
         initialNiche="Creator"
-        initialGoal=""
-        niches={availableNiches}
       />
     </div>
   );

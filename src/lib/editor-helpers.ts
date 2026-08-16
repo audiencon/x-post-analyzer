@@ -7,16 +7,69 @@ export function sanitizeModelOutput(text: string): string {
   return withoutTrailingAsterisks;
 }
 
-// Convert plain text with newlines into HTML paragraphs and <br> preserving double-space look
+export function isEditorHtml(value: string) {
+  return /<\/?(p|br|strong|em|mark|code)\b/i.test(value);
+}
+
+export function visiblePostText(value: string) {
+  if (!value) return '';
+  if (!isEditorHtml(value)) return value;
+  return value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/\n+$/g, '');
+}
+
+export function extractPostFromNote(note: string) {
+  const trimmed = note.trim();
+  if (!trimmed) return '';
+
+  const fence = trimmed.match(/```(?:[a-zA-Z]+)?\n([\s\S]*?)```/);
+  if (fence?.[1]?.trim()) return fence[1].trim();
+
+  const withoutTools = trimmed
+    .replace(/<writeTweet>[\s\S]*?<\/writeTweet>/gi, '')
+    .replace(/writeTweet\([^)]*\)/gi, '')
+    .trim();
+
+  const lines = (withoutTools || trimmed).split('\n');
+  if (
+    lines.length > 2 &&
+    /^(here|try|consider|rewrite|version|option|draft|sure|updated|this)\b/i.test(lines[0]) &&
+    lines[1].trim() === ''
+  ) {
+    return lines.slice(2).join('\n').trim();
+  }
+
+  return withoutTools || trimmed;
+}
+
+export function storedToEditorHtml(value: string) {
+  if (!value) return '';
+  return isEditorHtml(value) ? value : textToHtmlWithParagraphs(value);
+}
+
 export function textToHtmlWithParagraphs(value: string): string {
-  const paragraphs = value.split(/\n\n+/g).map(p =>
-    p
-      .split(/\n/g)
-      .map(line => (line === '' ? '<br>' : escapeHtml(line)))
-      .join('<br>')
-  );
-  // Add an extra <br> between paragraphs to preserve visual spacing
-  return paragraphs.map(p => `<p>${p}</p>`).join('<br>');
+  const normalized = value.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!normalized) return '';
+
+  const paragraphs = normalized
+    .split(/\n\n+/)
+    .map(block =>
+      block
+        .split('\n')
+        .map(line => escapeHtml(line))
+        .join('<br>')
+    )
+    .filter(Boolean);
+
+  return paragraphs.map(paragraph => `<p>${paragraph}</p>`).join('');
 }
 
 // Minimal HTML escape for text nodes

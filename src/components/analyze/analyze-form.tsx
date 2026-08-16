@@ -7,12 +7,10 @@ import { getSuggestions } from '@/actions/suggestions';
 import type { AnalysisResult, AdvancedAnalytics } from '@/actions/analyze';
 import type { Suggestion } from '@/actions/suggestions';
 import { AnalysisSkeleton } from '@/components/analysis-skeleton';
-import { ApiKeyDialog } from '@/components/api-key-dialog';
+import { updateRoastLine } from '@/actions/roasts';
 import Cookies from 'js-cookie';
 import { toast } from 'sonner';
-import { DEFAULT_MODEL } from '@/config/openai';
 import { cn } from '@/lib/utils';
-import { checkClientRateLimit } from '@/lib/rate-limit';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -28,93 +26,53 @@ import { FormHeader } from './form-header';
 import { InputSection } from './input-section';
 import { AnalysisDisplay } from './analysis-display';
 import { SuggestionsSection } from './suggestions-section';
-import { InspirationDialog } from '@/components/inspiration/InspirationDialog';
 import { showGenericError, showUsageLimitToast } from '@/lib/toast-helpers';
-import { MAX_LENGTH, MAX_REQUESTS, USAGE_STORAGE_KEY, WINDOW_MS } from '@/config/constants';
+import { HOME_POST_MAX, MAX_LENGTH } from '@/config/constants';
+import { GOALS, isGoal } from '@/config/niches';
+import { streamRoastText } from '@/lib/stream-roast';
+import { stashRoastDraft, takeRoastDraft } from '@/lib/roast-draft';
+import { track } from '@/lib/analytics';
+import { authClient } from '@/lib/auth-client';
+import { OpenInStudioButton } from '@/components/studio/open-in-studio-button';
 
-// --- Rate Limiting Constants ---
-// --- End Constants ---
-
-// --- Constants for Personalization ---
-const NICHES = [
-  'General',
-  'Tech',
-  'Marketing',
-  'SaaS',
-  'Creator',
-  'Writing',
-  'E-commerce',
-  'Finance',
-];
-const GOALS = [
-  'Engagement (Likes, Replies)',
-  'Reach & Virality',
-  'Clicks & Traffic',
-  'Follows & Growth',
-  'Thought Leadership',
-];
-// --- End Constants ---
+function redirectToSignIn(draft: string) {
+  stashRoastDraft(draft);
+  window.location.assign(`/auth/login?next=${encodeURIComponent('/roast')}`);
+}
 
 export function AnalyzeForm() {
+  const { data: session, isPending } = authClient.useSession();
   const [content, setContent] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGettingSuggestions, setIsGettingSuggestions] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
-  const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [currentAnalyzing, setCurrentAnalyzing] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL);
-  const [isUsingDefaultKey, setIsUsingDefaultKey] = useState(true);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [selectedNiche, setSelectedNiche] = useState<string>(NICHES[0]);
   const [selectedGoal, setSelectedGoal] = useState<string>(GOALS[0]);
-  const [hasVisualContent, setHasVisualContent] = useState<boolean>(false);
   const [abTestData, setAbTestData] = useState<{
     originalAnalysis: AnalysisResult | null;
     suggestionAnalysis: AnalysisResult | null;
     suggestionContent: string;
   } | null>(null);
-  const [showInspirationDialog, setShowInspirationDialog] = useState(false);
+  const [streamedRoast, setStreamedRoast] = useState('');
   const suggestionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const storedModel = Cookies.get('openai-model');
-    if (storedModel) {
-      setSelectedModel(storedModel);
-    }
-    const storedNiche = Cookies.get('user-niche');
-    if (storedNiche && NICHES.includes(storedNiche)) {
-      setSelectedNiche(storedNiche);
-    }
     const storedGoal = Cookies.get('user-goal');
-    if (storedGoal && GOALS.includes(storedGoal)) {
+    if (storedGoal && isGoal(storedGoal)) {
       setSelectedGoal(storedGoal);
     }
-    const savedApiKey = Cookies.get('openai-api-key');
-    setIsUsingDefaultKey(!savedApiKey);
+    const incomingDraft = takeRoastDraft();
+    if (incomingDraft) {
+      setContent(incomingDraft);
+    }
+    try {
+      localStorage.removeItem('apiUsageData');
+    } catch {
+      // ignore
+    }
   }, []);
-
-  // --- Rate Limiting Helper ---
-  const checkUsageLimit = (): boolean => {
-    const res = checkClientRateLimit(USAGE_STORAGE_KEY, MAX_REQUESTS, WINDOW_MS);
-    if (res.allowed) return true;
-    showUsageLimitToast({
-      message: `Usage limit reached (${MAX_REQUESTS} requests per hour)`,
-      description: `Please try again in ${res.timeLeftMinutes} minute(s).`,
-    });
-    return false;
-  };
-  // --- End Rate Limiting Helper ---
-
-  const handleModelChange = (model: string) => {
-    setSelectedModel(model);
-    Cookies.set('openai-model', model, { expires: 30 });
-  };
-
-  const handleNicheChange = (niche: string) => {
-    setSelectedNiche(niche);
-    Cookies.set('user-niche', niche, { expires: 30 });
-  };
 
   const handleGoalChange = (goal: string) => {
     setSelectedGoal(goal);
@@ -122,42 +80,54 @@ export function AnalyzeForm() {
   };
 
   const getCharacterCountColor = (count: number) => {
-    if (count >= MAX_LENGTH) return 'text-red-500';
-    if (count >= MAX_LENGTH * 0.9) return 'text-yellow-500';
-    if (count >= MAX_LENGTH * 0.7) return 'text-orange-500';
-    return 'text-green-500';
+    if (count > HOME_POST_MAX) return 'text-ink-soft';
+    if (count >= HOME_POST_MAX) return 'text-white/70';
+    return 'text-white/35';
   };
 
   const getProgressBarColor = (count: number) => {
-    if (count >= MAX_LENGTH) return 'bg-red-500';
-    if (count >= MAX_LENGTH * 0.9) return 'bg-yellow-500';
-    if (count >= MAX_LENGTH * 0.7) return 'bg-orange-500';
-    return 'bg-green-500';
+    if (count > HOME_POST_MAX) return 'bg-ink';
+    return 'bg-white/40';
   };
 
   const handleAnalyze = async (text: string = content) => {
-    // Apply rate limit only when using the default API key
-    if (!checkUsageLimit()) return;
-
+    if (isPending) return;
+    if (!session?.user) {
+      redirectToSignIn(text);
+      return;
+    }
     setIsAnalyzing(true);
     setCurrentAnalyzing(text);
     setShowSuggestions(false);
     setSuggestions(null);
+    setStreamedRoast('');
+    track('roast_started', { goal: selectedGoal });
     try {
-      const result = await analyzePost(text, selectedNiche, selectedGoal, hasVisualContent);
+      const roastPromise = streamRoastText(text, setStreamedRoast).catch(() => '');
+      const result = await analyzePost(text, undefined, selectedGoal);
+      const roastLine = await roastPromise;
+      if (roastLine) setStreamedRoast(roastLine);
       if (result) {
+        if (result.roastId && roastLine) {
+          await updateRoastLine(result.roastId, roastLine).catch(() => null);
+        }
+        track('roast_completed', {
+          engagement: result.scores.engagement,
+          friendliness: result.scores.friendliness,
+          virality: result.scores.virality,
+          payout: result.desk?.payout,
+        });
         setAnalysis(result);
         setContent(text);
       }
     } catch (error) {
       console.error('Error analyzing post:', error);
-      if (error instanceof Error && error.message.includes('API key')) {
-        setShowApiKeyDialog(true);
-      } else if (error instanceof Error && error.message.includes('Usage limit reached')) {
+      if (error instanceof Error && error.message.toLowerCase().includes('sign in')) {
+        redirectToSignIn(text);
+      } else if (error instanceof Error && error.message.toLowerCase().includes('limit reached')) {
         showUsageLimitToast({
-          message: 'Usage limit reached',
-          description:
-            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
+          message: 'Daily free limit reached',
+          description: error.message,
         });
       } else {
         showGenericError('Failed to analyze post', 'Please try again or check your connection.');
@@ -169,9 +139,6 @@ export function AnalyzeForm() {
   };
 
   const handleGetSuggestions = async () => {
-    // Apply rate limit only when using the default API key
-    if (!checkUsageLimit()) return;
-
     setIsGettingSuggestions(true);
     try {
       // Scroll suggestions into view if they are not already visible
@@ -191,16 +158,15 @@ export function AnalyzeForm() {
           }
         }
       }, 100); // Short delay after setting state
-      const result = await getSuggestions(content, selectedNiche, selectedGoal, hasVisualContent);
+      const result = await getSuggestions(content, undefined, selectedGoal);
       setSuggestions(result);
       setShowSuggestions(true);
     } catch (error) {
       console.error('Error getting suggestions:', error);
-      if (error instanceof Error && error.message.includes('Usage limit reached')) {
+      if (error instanceof Error && error.message.toLowerCase().includes('limit reached')) {
         showUsageLimitToast({
-          message: 'Usage limit reached',
-          description:
-            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
+          message: 'Daily free limit reached',
+          description: error.message,
         });
       } else {
         showGenericError('Failed to get suggestions', 'Please try again or check your connection.');
@@ -211,9 +177,6 @@ export function AnalyzeForm() {
   };
 
   const handleReanalyze = async (text: string) => {
-    // Apply rate limit only when using the default API key
-    if (!checkUsageLimit()) return;
-
     // Add check for valid text before proceeding
     if (!text || typeof text !== 'string' || text.trim() === '') {
       toast.error('Cannot re-analyze empty content.', {
@@ -228,6 +191,7 @@ export function AnalyzeForm() {
     setIsGettingSuggestions(true);
     setCurrentAnalyzing(text);
     setSuggestions(null);
+    setStreamedRoast('');
 
     // Scroll to top with a slight delay to ensure state updates have processed
     setTimeout(() => {
@@ -241,13 +205,18 @@ export function AnalyzeForm() {
     }, 100);
 
     try {
-      // Run analysis and get suggestions in parallel
+      const roastPromise = streamRoastText(text, setStreamedRoast).catch(() => '');
       const [analysisResult, suggestionsResult] = await Promise.all([
-        analyzePost(text, selectedNiche, selectedGoal, hasVisualContent),
-        getSuggestions(text, selectedNiche, selectedGoal, hasVisualContent),
+        analyzePost(text, undefined, selectedGoal),
+        getSuggestions(text, undefined, selectedGoal),
       ]);
+      const roastLine = await roastPromise;
+      if (roastLine) setStreamedRoast(roastLine);
 
       if (analysisResult) {
+        if (analysisResult.roastId && roastLine) {
+          await updateRoastLine(analysisResult.roastId, roastLine).catch(() => null);
+        }
         setAnalysis(analysisResult);
         setContent(text);
       }
@@ -256,13 +225,10 @@ export function AnalyzeForm() {
       }
     } catch (error) {
       console.error('Error during reanalysis:', error);
-      if (error instanceof Error && error.message.includes('API key')) {
-        setShowApiKeyDialog(true);
-      } else if (error instanceof Error && error.message.includes('Usage limit reached')) {
+      if (error instanceof Error && error.message.toLowerCase().includes('limit reached')) {
         showUsageLimitToast({
-          message: 'Usage limit reached',
-          description:
-            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
+          message: 'Daily free limit reached',
+          description: error.message,
         });
       } else {
         showGenericError('Failed to reanalyze post', 'Please try again or check your connection.');
@@ -305,20 +271,10 @@ export function AnalyzeForm() {
     });
   };
 
-  const handleApiKeySave = () => {
-    setIsUsingDefaultKey(false);
-    setShowApiKeyDialog(false);
-  };
-
   const handleReturn = () => {
     setAnalysis(null);
     setSuggestions(null);
-  };
-
-  // Handler for when an example is selected in the dialog
-  const handleInspirationSelect = (selectedText: string) => {
-    setContent(selectedText); // Update the main text area content
-    // Dialog closure is handled within InspirationDialog via onClose
+    setStreamedRoast('');
   };
 
   return (
@@ -328,44 +284,34 @@ export function AnalyzeForm() {
       <div className="w-full space-y-6">
         <div
           id="analysis-section"
-          className={cn('relative mx-auto flex w-full max-w-6xl flex-col items-center')}
+          className={cn('relative mx-auto flex w-full max-w-6xl flex-col')}
         >
           <AnimatePresence mode="wait">
             {!analysis && !isAnalyzing && (
               <InputSection
                 content={content}
                 setContent={setContent}
-                selectedNiche={selectedNiche}
-                handleNicheChange={handleNicheChange}
                 selectedGoal={selectedGoal}
                 handleGoalChange={handleGoalChange}
-                selectedModel={selectedModel}
-                handleModelChange={handleModelChange}
                 isAnalyzing={isAnalyzing}
-                isUsingDefaultKey={isUsingDefaultKey}
                 handleAnalyze={handleAnalyze}
-                setShowApiKeyDialog={setShowApiKeyDialog}
                 getCharacterCountColor={getCharacterCountColor}
                 getProgressBarColor={getProgressBarColor}
                 MAX_LENGTH={MAX_LENGTH}
-                NICHES={NICHES}
                 GOALS={GOALS}
-                hasVisualContent={hasVisualContent}
-                setHasVisualContent={setHasVisualContent}
-                onShowInspiration={() => setShowInspirationDialog(true)}
               />
             )}
 
             {isAnalyzing && (
               <motion.div
                 key="skeleton"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                transition={{ duration: 0.3 }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
                 className="w-full"
               >
-                <AnalysisSkeleton />
+                <AnalysisSkeleton streamedRoast={streamedRoast} />
               </motion.div>
             )}
 
@@ -377,95 +323,102 @@ export function AnalyzeForm() {
                 showSuggestions={showSuggestions}
                 handleGetSuggestions={handleGetSuggestions}
                 isGettingSuggestions={isGettingSuggestions}
-                apiKey={Cookies.get('openai-api-key') || ''}
-              />
+                streamedRoast={streamedRoast}
+                goal={selectedGoal}
+              >
+                <SuggestionsSection
+                  isGettingSuggestions={isGettingSuggestions}
+                  showSuggestions={showSuggestions}
+                  suggestions={suggestions}
+                  suggestionsRef={suggestionsRef}
+                  handleReanalyze={handleReanalyze}
+                  handleSimulateABTest={handleSimulateABTest}
+                  isAnalyzing={isAnalyzing}
+                  currentAnalyzing={currentAnalyzing}
+                  studioContext={{
+                    roast: streamedRoast,
+                    scores: analysis.scores,
+                    desk: analysis.desk,
+                    goal: selectedGoal,
+                  }}
+                />
+              </AnalysisDisplay>
             )}
           </AnimatePresence>
         </div>
-
-        <SuggestionsSection
-          isGettingSuggestions={isGettingSuggestions}
-          showSuggestions={showSuggestions}
-          suggestions={suggestions}
-          suggestionsRef={suggestionsRef}
-          handleReanalyze={handleReanalyze}
-          handleSimulateABTest={handleSimulateABTest}
-          isAnalyzing={isAnalyzing}
-          currentAnalyzing={currentAnalyzing}
-        />
       </div>
 
-      <ApiKeyDialog
-        open={showApiKeyDialog}
-        onClose={() => setShowApiKeyDialog(false)}
-        onSave={handleApiKeySave}
-      />
-
       <AlertDialog open={!!abTestData} onOpenChange={open => !open && setAbTestData(null)}>
-        <AlertDialogOverlay className="bg-black/50 backdrop-blur-sm" />
-        <AlertDialogContent className="w-full border-[#333] bg-[#1a1a1a] text-white sm:max-w-3xl">
+        <AlertDialogOverlay className="bg-desk/80" />
+        <AlertDialogContent className="border-rule bg-paper text-copy w-full sm:max-w-4xl">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-2xl">A/B Simulation</AlertDialogTitle>
+            <p className="text-ink-soft text-[11px] tracking-[0.18em] uppercase">Compare</p>
+            <AlertDialogTitle className="font-heading text-3xl tracking-tight">
+              Which line travels farther?
+            </AlertDialogTitle>
           </AlertDialogHeader>
 
           {abTestData && (
-            <div className="max-h-[70vh] overflow-y-auto p-1 pr-3">
-              <>
-                <div className="grid grid-cols-1 gap-6 py-4 md:grid-cols-2">
-                  <div className="flex flex-col justify-between gap-4">
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-white/80">Original</h3>
-                      <div className="min-h-[120px] rounded-md border border-[#2a2a2a] bg-[#222] p-3 text-sm text-white/90">
-                        {content}
-                      </div>
-                    </div>
+            <div className="max-h-[70vh] overflow-y-auto">
+              <div className="grid gap-10 py-6 md:grid-cols-2">
+                <div>
+                  <p className="text-[11px] tracking-[0.16em] text-white/35 uppercase">The draft</p>
+                  <p className="mt-3 text-sm leading-7 whitespace-pre-wrap text-white/70">
+                    {content}
+                  </p>
+                  <div className="mt-6">
                     <ScoreDisplay scores={abTestData.originalAnalysis?.scores} />
                   </div>
-
-                  <div className="flex flex-col justify-between gap-4">
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-white/80">Suggestion</h3>
-                      <div className="min-h-[120px] rounded-md border border-[#2a2a2a] bg-[#222] p-3 text-sm text-white/90">
-                        {abTestData.suggestionContent}
-                      </div>
-                    </div>
+                </div>
+                <div>
+                  <p className="text-ink-soft text-[11px] tracking-[0.16em] uppercase">
+                    The version
+                  </p>
+                  <p className="mt-3 text-sm leading-7 whitespace-pre-wrap text-white/70">
+                    {abTestData.suggestionContent}
+                  </p>
+                  <div className="mt-6">
                     <ScoreDisplay scores={abTestData.suggestionAnalysis?.scores} />
                   </div>
                 </div>
-
-                <div className="mt-4">
-                  <ScoreComparison
-                    originalScores={abTestData.originalAnalysis?.scores}
-                    suggestionScores={abTestData.suggestionAnalysis?.scores}
-                  />
-                </div>
-              </>
+              </div>
+              <ScoreComparison
+                originalScores={abTestData.originalAnalysis?.scores}
+                suggestionScores={abTestData.suggestionAnalysis?.scores}
+              />
             </div>
           )}
 
-          <AlertDialogFooter className="mt-4 gap-5">
-            <p className="text-xs text-white/50">
-              * This simulation compares scores based on AI analysis metrics. It does not guarantee
-              real-world engagement differences.
+          <AlertDialogFooter className="mt-6 items-center justify-between gap-4 sm:justify-between">
+            <p className="text-xs text-white/35">
+              Scores, not a promise. The feed still gets a vote.
             </p>
-            <AlertDialogCancel
-              onClick={() => setAbTestData(null)}
-              className="border-[#333] bg-[#2a2a2a] text-white hover:bg-[#333]"
-            >
-              Close
-            </AlertDialogCancel>
+            <div className="flex flex-wrap items-center gap-3">
+              {abTestData ? (
+                <OpenInStudioButton
+                  variant="ghost"
+                  className="text-ink-soft hover:text-ink-soft/80 h-auto rounded-none px-0 hover:bg-transparent"
+                  draft={{
+                    tweets: [abTestData.suggestionContent],
+                    roast: streamedRoast,
+                    scores: abTestData.suggestionAnalysis?.scores,
+                    desk: analysis?.desk,
+                    goal: selectedGoal,
+                    title: 'Compared version',
+                  }}
+                  label="Finish this in Studio"
+                />
+              ) : null}
+              <AlertDialogCancel
+                onClick={() => setAbTestData(null)}
+                className="border-rule bg-transparent text-white hover:bg-white/5"
+              >
+                Close
+              </AlertDialogCancel>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      <InspirationDialog
-        open={showInspirationDialog}
-        onClose={() => setShowInspirationDialog(false)}
-        onExampleSelect={handleInspirationSelect}
-        initialNiche={selectedNiche}
-        initialGoal={selectedGoal}
-        niches={NICHES}
-      />
     </>
   );
 }

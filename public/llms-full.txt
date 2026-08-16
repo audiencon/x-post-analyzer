@@ -1,0 +1,49 @@
+# PostRoast
+
+> AI roast for X drafts. Sign in, paste a post, get Engage / Warmth / Viral / Payout scores and a rewrite you would ship. Ten free roasts a day. Does not post or schedule on X.
+
+PostRoast (https://www.postroast.app) is a writing tool for people who already post on X. The job is the last pass before Post: tell the writer if the draft will die, then hand them a version they would actually ship.
+
+## Product facts
+
+- Sign-in is required to roast. Email is enough. X sign-in, when offered, is identity only.
+- Free plan: 10 roasts/day, 3 saved drafts, 8 critiques/day.
+- Pro: $19/month. Unlimited roasts and roast history. Draft and critique caps stay.
+- Studio: $32/month. Unlimited roasts, drafts, and critique.
+- Founder: $199 once. Lifetime Studio. 100 seats, then it closes.
+- Compose on X opens a draft with the first post. Remaining thread posts are copied. PostRoast does not get posting permission and does not schedule.
+- Public roast cards publish only when the user clicks share.
+- We do not sell drafts. We do not invent star ratings or customer counts.
+
+## Scores
+
+- Engage: will anyone stop.
+- Warmth: does it sound like a person.
+- Viral: will anyone pass it on.
+- Payout: can this post-shape earn X Original Content Rewards, ignoring follower count. Replies do not earn.
+
+The roast is an opinion, not a guarantee of reach or payout.
+
+## Docs
+
+- [Home](https://www.postroast.app/): Overview, scores, who it is for, FAQ, pricing.
+- [Roast](https://www.postroast.app/roast): The roast form. Account required.
+- [Studio](https://www.postroast.app/studio): Signed-in thread editor and critique after the roast.
+- [Ideas](https://www.postroast.app/ideas): Eight drafts in a niche, then roast them.
+- [FAQ](https://www.postroast.app/faq): Short answers to product questions.
+- [Compare](https://www.postroast.app/vs): vs Typefully, vs SupaBird, vs GrowthX.
+- [Founder](https://www.postroast.app/founder): Lifetime Studio offer.
+- [Terms](https://www.postroast.app/terms): Operating rules.
+- [Privacy](https://www.postroast.app/privacy): Data, processors, deletion.
+
+## FAQ
+
+- Do I need an account to roast a post? Yes. Sign in, then you get ten free roasts a day.
+- Does PostRoast post or schedule on X? No. Compose on X opens a draft. We do not take posting permission.
+- Pro vs Studio? Pro is unlimited roasts and history. Studio adds unlimited drafts and critique.
+- Is the roast a guarantee? No. It is an opinion about the draft.
+- What happens to a draft? Stored for the roast and history. Public only if you share. Not sold.
+
+## Contact
+
+Audiencon — https://x.com/audiencon

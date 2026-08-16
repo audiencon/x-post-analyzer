@@ -1,48 +1,28 @@
 import { OpenAI } from 'openai';
-import { NextRequest, NextResponse } from 'next/server';
-import { DEFAULT_API_KEY } from '@/config/openai';
+import { NextResponse } from 'next/server';
+import { DEFAULT_API_KEY, DEFAULT_MODEL } from '@/config/openai';
+import { studioRewriteSystemPrompt } from '@/config/prompt';
+import { assertCanUse, recordUsage, usageErrorStatus } from '@/lib/usage';
 
-// In-memory rate limiting (simple implementation)
-const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT = 10; // requests per hour
-const RATE_LIMIT_WINDOW = 60 * 60 * 1000; // 1 hour in milliseconds
-
-function checkRateLimit(identifier: string): boolean {
-  const now = Date.now();
-  const userLimit = rateLimitMap.get(identifier);
-
-  if (!userLimit || now > userLimit.resetTime) {
-    rateLimitMap.set(identifier, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
-    return true;
-  }
-
-  if (userLimit.count >= RATE_LIMIT) {
-    return false;
-  }
-
-  userLimit.count++;
-  return true;
-}
-
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
   try {
-    const { prompt, apiKey } = await request.json();
+    const { prompt } = await request.json();
 
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
     }
 
-    // Determine which API key to use
-    const openaiApiKey = apiKey || DEFAULT_API_KEY;
-    const identifier = apiKey || 'default';
-
-    // Check rate limit for the identifier
-    if (!checkRateLimit(identifier)) {
-      return NextResponse.json({ error: 'Usage limit reached' }, { status: 429 });
+    try {
+      await assertCanUse('rewrite');
+      await recordUsage('rewrite');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Daily rewrite limit reached.';
+      return NextResponse.json({ error: message }, { status: usageErrorStatus(error) });
     }
 
+    const openaiApiKey = process.env.OPENAI_API_KEY || DEFAULT_API_KEY;
     if (!openaiApiKey) {
-      return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 });
+      return NextResponse.json({ error: 'Rewrite is down. Try again in a minute.' }, { status: 500 });
     }
 
     const openai = new OpenAI({
@@ -50,12 +30,11 @@ export async function POST(request: NextRequest) {
     });
 
     const stream = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: DEFAULT_MODEL,
       messages: [
         {
           role: 'system',
-          content:
-            'You are a helpful assistant that rewrites content for social media. Respond with only the rewritten content, no explanations or commentary.',
+          content: studioRewriteSystemPrompt(),
         },
         {
           role: 'user',
@@ -100,6 +79,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
-
-
-

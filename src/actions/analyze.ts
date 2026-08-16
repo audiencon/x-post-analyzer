@@ -1,11 +1,12 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use server';
 
 import OpenAI from 'openai';
-import Cookies from 'js-cookie';
+import { cookies } from 'next/headers';
 import { DEFAULT_MODEL } from '@/config/openai';
 import { buildAnalyzeSystemPrompt } from '@/config/prompt';
-import { MAX_REQUESTS, WINDOW_MS } from '@/config/constants';
+import { assertCanUse, recordUsage } from '@/lib/usage';
+import { saveRoast } from '@/actions/roasts';
+import { buildDesk, type DraftDesk } from '@/lib/x-monetization';
 
 export interface AdvancedAnalytics {
   readability: {
@@ -51,6 +52,8 @@ export interface AnalysisResult {
     weaknesses: string[];
     recommendations: string[];
   };
+  desk?: DraftDesk;
+  roastId?: string;
 }
 
 export async function analyzePost(
@@ -59,63 +62,59 @@ export async function analyzePost(
   goal?: string,
   hasVisualContent?: boolean
 ): Promise<AnalysisResult> {
-  // Server-side rate limiting for default API key usage
-  // Module-level usage tracker
-  const globalAny = global as any;
-  if (!globalAny.__analyze_usage__) {
-    globalAny.__analyze_usage__ = { count: 0, windowStart: Date.now() } as {
-      count: number;
-      windowStart: number;
-    };
-  }
-  const usage = globalAny.__analyze_usage__ as { count: number; windowStart: number };
-  const now = Date.now();
-  if (now - usage.windowStart > WINDOW_MS) {
-    usage.count = 0;
-    usage.windowStart = now;
-  }
-  if (usage.count >= MAX_REQUESTS) {
-    throw new Error(`Usage limit reached (${MAX_REQUESTS} requests per hour)`);
-  }
-  usage.count += 1;
+  await assertCanUse('analyze');
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error(
-      'OpenAI API key is required. Please provide your API key or set OPENAI_API_KEY environment variable.'
-    );
+    throw new Error('Roast is down. Try again in a minute.');
   }
 
   if (!content || typeof content !== 'string' || content.trim() === '') {
     throw new Error('Invalid content provided for analysis.');
   }
 
+  const cookieStore = await cookies();
+  const model = cookieStore.get('openai-model')?.value || DEFAULT_MODEL;
   const openai = new OpenAI({ apiKey });
-  const model = Cookies.get('openai-model') || DEFAULT_MODEL;
-
   const systemPrompt = buildAnalyzeSystemPrompt({ niche, goal, hasVisualContent });
-
-  const messages = [
-    {
-      role: 'system',
-      content: systemPrompt,
-    },
-    {
-      role: 'user',
-      content,
-    },
-  ];
 
   try {
     const completion = await openai.chat.completions.create({
       model,
-      messages: messages as any,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content },
+      ],
       temperature: 0.7,
       response_format: { type: 'json_object' },
     });
 
-    const response = JSON.parse(completion.choices[0].message.content || '{}') as AnalysisResult;
-    return response;
+    const response = JSON.parse(completion.choices[0].message.content || '{}') as AnalysisResult & {
+      monetization?: {
+        originality?: number;
+        originalKind?: string;
+        verdict?: string;
+        payout?: number;
+      };
+    };
+    if (
+      !response.scores ||
+      typeof response.scores.engagement !== 'number' ||
+      typeof response.scores.friendliness !== 'number' ||
+      typeof response.scores.virality !== 'number'
+    ) {
+      throw new Error('Could not score this draft. Try again.');
+    }
+    const desk = buildDesk(content, response.monetization);
+    const result: AnalysisResult = {
+      scores: response.scores,
+      analytics: response.analytics,
+      analysis: response.analysis,
+      desk,
+    };
+    await recordUsage('analyze');
+    const saved = await saveRoast(content, result);
+    return { ...result, roastId: saved?.id };
   } catch (error) {
     console.error('Error analyzing post:', error);
     throw error;

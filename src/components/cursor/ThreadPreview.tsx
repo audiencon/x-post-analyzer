@@ -2,17 +2,15 @@
 
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
-import { Edit2, X, Plus, Trash2 } from 'lucide-react';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
 import { TipTapEditor } from './TipTapEditor';
 import { CharacterCounter } from './CharacterCounter';
 import { AIChangesManager } from './AIChangesManager';
 import type { Editor } from '@tiptap/react';
-import { applyHighlightRange } from '@/lib/editor-helpers';
+import { applyHighlightRange, visiblePostText } from '@/lib/editor-helpers';
 import type { AIChange } from '@/lib/ai-changes-simple';
 import type { AnalysisResult } from '@/actions/analyze';
-import { ScoreDisplay } from '@/components/analyze/score-display';
+import { InkScore } from '@/components/tool/ink-score';
+import type { StudioStarter } from '@/lib/studio-starters';
 
 interface ThreadPreviewProps {
   blocks: Array<{ id: string; text: string }>;
@@ -31,6 +29,11 @@ interface ThreadPreviewProps {
     highlights: { start: number; end: number }[]
   ) => void;
   onAddBlock?: () => void;
+  onCopy?: () => void;
+  onDownload?: () => void;
+  onComposeOnX?: () => void;
+  onMarkPosted?: () => void;
+  posted?: boolean;
   onRemoveBlock?: (blockId: string) => void;
   activeBlockId?: string | null;
   busy?: boolean;
@@ -38,6 +41,9 @@ interface ThreadPreviewProps {
   highlightsById?: Record<string, { start: number; end: number }[]>;
   aiChanges?: AIChange[];
   analysisById?: Record<string, AnalysisResult | null>;
+  starters?: StudioStarter[];
+  onUseStarter?: (insert: string) => void;
+  emptyPlaceholder?: string;
 }
 
 export function ThreadPreview({
@@ -52,6 +58,11 @@ export function ThreadPreview({
   onBlockChangesUpdate,
   onBlockRevertChange,
   onAddBlock,
+  onCopy,
+  onDownload,
+  onComposeOnX,
+  onMarkPosted,
+  posted = false,
   onRemoveBlock,
   activeBlockId,
   busy = false,
@@ -59,8 +70,14 @@ export function ThreadPreview({
   highlightsById = {},
   aiChanges = [],
   analysisById = {},
+  starters = [],
+  onUseStarter,
+  emptyPlaceholder,
 }: ThreadPreviewProps) {
-  const nonEmptyBlocks = useMemo(() => blocks.filter(b => b.text.trim().length > 0), [blocks]);
+  const nonEmptyBlocks = useMemo(
+    () => blocks.filter(b => visiblePostText(b.text).trim().length > 0),
+    [blocks]
+  );
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const previewEditorRefs = useRef<Record<string, Editor>>({});
 
@@ -92,9 +109,11 @@ export function ThreadPreview({
         // Apply new highlights
         setTimeout(() => {
           if (editor && editor.view && editor.view.dom) {
+            const { from, to } = editor.state.selection;
+            if (from !== to) return;
             highlights.forEach(range => {
               try {
-                applyHighlightRange(editor, range.start, range.end, 'rgba(34, 197, 94, 0.3)');
+                applyHighlightRange(editor, range.start, range.end, 'oklch(0.64 0.19 28 / 0.28)');
               } catch {
                 // Ignore highlight errors
               }
@@ -209,42 +228,75 @@ export function ThreadPreview({
   const displayBlocks = blocks.length > 0 ? blocks : [{ id: 'placeholder', text: '' }];
 
   return (
-    <div className={cn('rounded-lg border border-white/10 bg-[#0e0e0e] p-4', className)}>
-      <div className="mb-3 flex items-center gap-2">
-        <span className="text-sm">𝕏</span>
-        <span className="text-xs font-medium text-white/70">Preview</span>
-        <span className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-white/40">
-            {nonEmptyBlocks.length > 0
-              ? `${nonEmptyBlocks.length} ${nonEmptyBlocks.length === 1 ? 'tweet' : 'tweets'}`
-              : 'Start writing...'}
-          </span>
-          {onAddBlock && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={onAddBlock}
-              className="h-7 gap-1.5 px-2 text-xs"
-              disabled={busy}
-              aria-label="Add new tweet to thread"
+    <div className={cn('space-y-2', className)}>
+      <div className="flex items-baseline justify-between gap-4">
+        <p className="text-[11px] tracking-[0.18em] text-white/35 uppercase">
+          {nonEmptyBlocks.length > 0
+            ? `${nonEmptyBlocks.length} ${nonEmptyBlocks.length === 1 ? 'post' : 'posts'}`
+            : 'Draft'}
+        </p>
+        <div className="flex items-center gap-4 text-xs text-white/40">
+          {onCopy ? (
+            <button
+              type="button"
+              onClick={onCopy}
+              className="hover:text-white disabled:opacity-40"
+              disabled={!nonEmptyBlocks.length}
             >
-              <Plus className="h-3.5 w-3.5" />
-              <span>Add Tweet</span>
-            </Button>
-          )}
-        </span>
+              Copy
+            </button>
+          ) : null}
+          {onDownload ? (
+            <button
+              type="button"
+              onClick={onDownload}
+              className="hover:text-white disabled:opacity-40"
+              disabled={!nonEmptyBlocks.length}
+            >
+              Download
+            </button>
+          ) : null}
+          {onComposeOnX ? (
+            <button
+              type="button"
+              onClick={onComposeOnX}
+              className="hover:text-white disabled:opacity-40"
+              disabled={!nonEmptyBlocks.length}
+              title={
+                nonEmptyBlocks.length > 1
+                  ? 'X only takes the first post. The rest is copied.'
+                  : 'Open X with this post'
+              }
+            >
+              {nonEmptyBlocks.length > 1 ? 'Compose first' : 'Compose on X'}
+            </button>
+          ) : null}
+          {onMarkPosted ? (
+            <button
+              type="button"
+              onClick={onMarkPosted}
+              className="hover:text-white disabled:opacity-40"
+              disabled={!nonEmptyBlocks.length && !posted}
+            >
+              {posted ? 'Posted' : 'Mark posted'}
+            </button>
+          ) : null}
+          {onAddBlock ? (
+            <button type="button" onClick={onAddBlock} className="hover:text-white" disabled={busy}>
+              Add post
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="space-y-3">
         {displayBlocks.map((block, idx) => {
           const isActive = activeBlockId === block.id;
           const isEditing = editingBlockId === block.id;
-          const isEmpty = !block.text.trim();
-          const shouldShowEditor = isEditing || isEmpty; // Always show editor if empty or editing
-
-          const handleStartEdit = (e: React.MouseEvent) => {
-            e.stopPropagation();
-            setEditingBlockId(block.id);
-          };
+          const isEmpty = !visiblePostText(block.text).trim();
+          const shouldShowEditor = true;
+          const analysis = analysisById[block.id];
+          const roastLine =
+            analysis?.analysis?.weaknesses?.[0] || analysis?.analysis?.synthesis || null;
 
           const handleCancelEdit = () => {
             setEditingBlockId(null);
@@ -263,182 +315,140 @@ export function ThreadPreview({
               key={block.id}
               data-block-id={block.id}
               className={cn(
-                'group relative rounded-lg border bg-[#111] p-3 transition-all duration-200',
-                isActive
-                  ? 'border-[#1d9bf0]/50 bg-[#1d9bf0]/5 shadow-lg shadow-[#1d9bf0]/10'
-                  : 'border-white/10 hover:border-white/20 hover:bg-[#151515]',
-                onBlockClick && !shouldShowEditor && 'cursor-pointer'
+                'group relative border-t border-white/8 pt-5 pb-6',
+                isActive && 'border-t-[oklch(0.64_0.19_28)]'
               )}
-              onClick={() => !shouldShowEditor && onBlockClick?.(block.id)}
+              onClick={() => onBlockClick?.(block.id)}
               onKeyDown={e => {
                 if (isEditing && e.key === 'Escape') {
                   handleCancelEdit();
                 }
               }}
             >
-              {/* Active indicator */}
-              {isActive && (
-                <div className="absolute top-0 bottom-0 left-0 w-1 rounded-l-lg bg-[#1d9bf0]" />
-              )}
-
-              <div className="mb-2 flex items-start gap-3">
-                <Avatar className="h-10 w-10 shrink-0 ring-2 ring-white/10 transition-all group-hover:ring-[#1d9bf0]/30">
-                  <AvatarFallback className="bg-[#1d9bf0] text-white">You</AvatarFallback>
-                </Avatar>
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 flex items-center gap-2">
-                    <span className="font-semibold text-white">You</span>
-                    <span className="text-xs text-white/40">@you</span>
-                    {idx > 0 && <span className="text-xs text-white/30">· Thread {idx + 1}</span>}
-                    <div className="ml-auto flex items-center gap-1">
-                      {!shouldShowEditor && onBlockClick && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 px-2 opacity-0 transition-opacity group-hover:opacity-100"
-                          onClick={handleStartEdit}
-                          aria-label="Edit this tweet"
-                        >
-                          <Edit2 className="h-3 w-3" />
-                        </Button>
-                      )}
-                    </div>
-                    {shouldShowEditor && (
-                      <div className="ml-auto flex items-center gap-1">
-                        {onBlockAnalyze && !isEmpty && (
-                          <Button
-                            size="sm"
-                            disabled={busy || !block.text.trim()}
-                            onClick={e => {
-                              e.stopPropagation();
-                              onBlockAnalyze(block.id);
-                            }}
-                            className="relative h-7 bg-linear-to-r from-purple-600 to-fuchsia-600 text-white shadow hover:from-purple-500 hover:to-fuchsia-500 disabled:opacity-50"
-                            aria-label="Analyze this post"
-                          >
-                            {loadingAction === 'analyze' && (
-                              <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-                            )}
-                            <span className="relative text-xs">Analyze</span>
-                          </Button>
-                        )}
-                        {onRemoveBlock && blocks.length > 1 && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-6 px-2 text-red-400/60 hover:bg-red-500/20 hover:text-red-300"
-                            onClick={e => {
-                              e.stopPropagation();
-                              onRemoveBlock(block.id);
-                            }}
-                            aria-label="Delete this tweet"
-                            disabled={busy}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        )}
-                        {!isEmpty && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-6 px-2 text-red-400 hover:bg-red-500/20 hover:text-red-300"
-                            onClick={e => {
-                              e.stopPropagation();
-                              handleCancelEdit();
-                            }}
-                            aria-label="Close editor"
-                            title="Close (Esc)"
-                          >
-                            <X className="h-3 w-3" />
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  {shouldShowEditor ? (
-                    <div className="space-y-2" onClick={e => e.stopPropagation()}>
-                      <div className="relative rounded-lg border border-white/20 bg-[#0a0a0a] p-2">
-                        <TipTapEditor
-                          value={block.text}
-                          onChange={handleEditorChange}
-                          className="min-h-[100px] text-sm text-white focus-visible:ring-0"
-                          placeholder={
-                            isEmpty
-                              ? "What's on your mind?\nTip: type / to see actions"
-                              : 'Edit your tweet... (Press Esc to close)'
+              <div className="mb-2 flex items-center justify-between">
+                <p className="font-heading text-sm text-white/30">
+                  {String(idx + 1).padStart(2, '0')}
+                </p>
+                <div className="flex items-center gap-3 text-xs text-white/35">
+                  <CharacterCounter text={block.text} />
+                  {onBlockAnalyze && !isEmpty ? (
+                    <button
+                      type="button"
+                      disabled={busy || !block.text.trim()}
+                      onClick={e => {
+                        e.stopPropagation();
+                        onBlockAnalyze(block.id);
+                      }}
+                      className="hover:text-white disabled:opacity-40"
+                      title="Uses one roast from today's limit"
+                    >
+                      {loadingAction === 'analyze' ? 'Reading…' : 'Roast'}
+                    </button>
+                  ) : null}
+                  {onRemoveBlock && blocks.length > 1 ? (
+                    <button
+                      type="button"
+                      className="hover:text-[oklch(0.72_0.16_28)]"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onRemoveBlock(block.id);
+                      }}
+                      disabled={busy}
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="min-w-0">
+                {shouldShowEditor ? (
+                  <div onClick={e => e.stopPropagation()}>
+                    <div className="studio-paper">
+                      <TipTapEditor
+                        value={block.text}
+                        onChange={handleEditorChange}
+                        onAddPost={onAddBlock}
+                        className="min-h-[8.5rem] text-[1.2rem] leading-[1.55] text-[oklch(0.93_0.015_80)] focus-visible:ring-0"
+                        placeholder={
+                          isEmpty && blocks.length > 1
+                            ? 'Type / to write the next post from the last one.'
+                            : isEmpty
+                              ? (emptyPlaceholder ??
+                                'Write the line you would actually post. Type / for commands.')
+                              : 'Keep going.'
+                        }
+                        slashContext={{ empty: isEmpty, thread: blocks.length > 1 }}
+                        loadingAction={loadingAction}
+                        onSelectionChange={(start, end) => {
+                          if (onBlockSelectionChange) {
+                            onBlockSelectionChange(block.id, start, end);
                           }
-                          loadingAction={loadingAction}
-                          onSelectionChange={(start, end) => {
-                            if (onBlockSelectionChange) {
-                              onBlockSelectionChange(block.id, start, end);
+                        }}
+                        onSlashCommand={command => {
+                          if (onBlockSlashCommand) {
+                            const editor = previewEditorRefs.current[block.id];
+                            // Only pass editor if it's mounted and ready
+                            if (editor && editor.view && editor.view.dom) {
+                              onBlockSlashCommand(block.id, command, editor);
+                            } else {
+                              onBlockSlashCommand(block.id, command, undefined);
                             }
-                          }}
-                          onSlashCommand={command => {
-                            if (onBlockSlashCommand) {
-                              const editor = previewEditorRefs.current[block.id];
-                              // Only pass editor if it's mounted and ready
-                              if (editor && editor.view && editor.view.dom) {
-                                onBlockSlashCommand(block.id, command, editor);
-                              } else {
-                                onBlockSlashCommand(block.id, command, undefined);
-                              }
+                          }
+                        }}
+                        onAiAction={kind => {
+                          if (onBlockAiAction) {
+                            const editor = previewEditorRefs.current[block.id];
+                            // Only pass editor if it's mounted and ready
+                            if (editor && editor.view && editor.view.dom) {
+                              onBlockAiAction(block.id, kind, editor);
+                            } else {
+                              onBlockAiAction(block.id, kind, undefined);
                             }
-                          }}
-                          onAiAction={kind => {
-                            if (onBlockAiAction) {
-                              const editor = previewEditorRefs.current[block.id];
-                              // Only pass editor if it's mounted and ready
-                              if (editor && editor.view && editor.view.dom) {
-                                onBlockAiAction(block.id, kind, editor);
-                              } else {
-                                onBlockAiAction(block.id, kind, undefined);
-                              }
+                          }
+                        }}
+                        onEditorReady={(editor: Editor) => {
+                          // Store editor ref - always store it for the block
+                          previewEditorRefs.current[block.id] = editor;
+
+                          // Wait for editor view to be fully available
+                          const waitForView = (attempts = 0) => {
+                            if (attempts > 10) return; // Max 10 attempts (1 second)
+
+                            // Double-check that this is still the active editor
+                            if (previewEditorRefs.current[block.id] !== editor) {
+                              return; // Editor was replaced
                             }
-                          }}
-                          onEditorReady={(editor: Editor) => {
-                            // Store editor ref - always store it for the block
-                            previewEditorRefs.current[block.id] = editor;
 
-                            // Wait for editor view to be fully available
-                            const waitForView = (attempts = 0) => {
-                              if (attempts > 10) return; // Max 10 attempts (1 second)
-
-                              // Double-check that this is still the active editor
-                              if (previewEditorRefs.current[block.id] !== editor) {
-                                return; // Editor was replaced
-                              }
-
-                              if (editor && editor.view && editor.view.dom) {
-                                // Apply highlights if they exist
-                                const highlights = highlightsById[block.id] || [];
-                                if (highlights.length > 0) {
-                                  // Apply highlights after editor is ready
-                                  setTimeout(() => {
-                                    // Check again that editor is still valid
-                                    if (
-                                      previewEditorRefs.current[block.id] === editor &&
-                                      editor.view &&
-                                      editor.view.dom
-                                    ) {
-                                      highlights.forEach(range => {
-                                        try {
-                                          applyHighlightRange(
-                                            editor,
-                                            range.start,
-                                            range.end,
-                                            'rgba(34, 197, 94, 0.3)'
-                                          );
-                                        } catch {
-                                          // Ignore highlight errors
-                                        }
-                                      });
-                                    }
-                                  }, 50);
-                                }
-
-                                // Focus the editor when it's ready
+                            if (editor && editor.view && editor.view.dom) {
+                              // Apply highlights if they exist
+                              const highlights = highlightsById[block.id] || [];
+                              if (highlights.length > 0) {
+                                // Apply highlights after editor is ready
                                 setTimeout(() => {
                                   // Check again that editor is still valid
+                                  if (
+                                    previewEditorRefs.current[block.id] === editor &&
+                                    editor.view &&
+                                    editor.view.dom
+                                  ) {
+                                    highlights.forEach(range => {
+                                      try {
+                                        applyHighlightRange(
+                                          editor,
+                                          range.start,
+                                          range.end,
+                                          'oklch(0.64 0.19 28 / 0.28)'
+                                        );
+                                      } catch {
+                                        // Ignore highlight errors
+                                      }
+                                    });
+                                  }
+                                }, 50);
+                              }
+
+                              if (isActive && isEmpty) {
+                                setTimeout(() => {
                                   if (
                                     previewEditorRefs.current[block.id] === editor &&
                                     editor.view &&
@@ -452,143 +462,107 @@ export function ThreadPreview({
                                     }
                                   }
                                 }, 50);
-                              } else {
-                                // Retry after a short delay
-                                setTimeout(() => waitForView(attempts + 1), 100);
                               }
-                            };
+                            } else {
+                              // Retry after a short delay
+                              setTimeout(() => waitForView(attempts + 1), 100);
+                            }
+                          };
 
-                            waitForView();
-                          }}
-                        />
-                        <div className="absolute right-3 bottom-3">
-                          <CharacterCounter text={block.text} />
-                        </div>
-                      </div>
-                      {!isEmpty && (
-                        <div className="text-xs text-white/40">Press Esc to close editor</div>
-                      )}
-                    </div>
-                  ) : (
-                    <>
-                      <div className="text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-white/90">
-                        {block.text}
-                      </div>
-                      <div className="mt-3 flex items-center gap-4 text-xs text-white/40">
-                        <span className="transition-colors group-hover:text-white/60">
-                          💬 Reply
-                        </span>
-                        <span className="transition-colors group-hover:text-white/60">
-                          🔄 Retweet
-                        </span>
-                        <span className="transition-colors group-hover:text-white/60">❤️ Like</span>
-                        <span className="transition-colors group-hover:text-white/60">
-                          📤 Share
-                        </span>
-                      </div>
-                    </>
-                  )}
-
-                  {/* AI Changes Manager for this block */}
-                  {onBlockChangesUpdate && onBlockRevertChange && (
-                    <div className="mt-3">
-                      <AIChangesManager
-                        editor={previewEditorRefs.current[block.id] || null}
-                        changes={aiChanges.filter(c => c.blockId === block.id)}
-                        onChangesUpdate={changes => {
-                          // Update only changes for this block, keep others
-                          if (onBlockChangesUpdate) {
-                            const otherChanges = aiChanges.filter(c => c.blockId !== block.id);
-                            onBlockChangesUpdate(block.id, [...otherChanges, ...changes]);
-                          }
-                        }}
-                        onRevertChange={(change, newText, highlights) => {
-                          onBlockRevertChange(block.id, change, newText, highlights);
+                          waitForView();
                         }}
                       />
                     </div>
-                  )}
-
-                  {/* Analysis Display for this block */}
-                  {analysisById[block.id] && (
-                    <div className="mt-3 rounded-lg border border-purple-500/30 bg-purple-500/5 p-3">
-                      <div className="mb-2 flex items-center justify-between">
-                        <h4 className="text-xs font-semibold text-purple-300">Analysis Results</h4>
+                    {isActive ? (
+                      <p className="mt-3 text-[11px] tracking-wide text-white/25">
+                        / commands · ⌘↵ next post
+                      </p>
+                    ) : null}
+                    {analysis ? (
+                      <div className="border-ink mt-5 border-l-2 pl-4">
+                        {roastLine ? (
+                          <p className="font-heading text-ink-soft text-lg leading-snug">
+                            {roastLine}
+                          </p>
+                        ) : null}
+                        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                          <InkScore
+                            label="Engage"
+                            value={analysis.scores.engagement}
+                            sting={analysis.scores.engagement < 55}
+                            compact
+                          />
+                          <InkScore
+                            label="Warmth"
+                            value={analysis.scores.friendliness}
+                            sting={analysis.scores.friendliness < 55}
+                            compact
+                          />
+                          <InkScore
+                            label="Viral"
+                            value={analysis.scores.virality}
+                            sting={analysis.scores.virality < 55}
+                            compact
+                          />
+                          {analysis.desk ? (
+                            <InkScore
+                              label="Payout"
+                              value={analysis.desk.payout}
+                              sting={analysis.desk.payout < 55}
+                              compact
+                            />
+                          ) : null}
+                        </div>
                       </div>
-                      <ScoreDisplay scores={analysisById[block.id]?.scores} />
-                      {analysisById[block.id]?.analysis &&
-                        (() => {
-                          const analysis = analysisById[block.id]?.analysis;
-                          if (!analysis) return null;
-                          return (
-                            <div className="mt-3 space-y-2 text-xs">
-                              {analysis.synthesis && (
-                                <div>
-                                  <span className="font-medium text-white/70">Summary: </span>
-                                  <span className="text-white/90">{analysis.synthesis}</span>
-                                </div>
-                              )}
-                              {analysis.strengths && analysis.strengths.length > 0 && (
-                                <div>
-                                  <span className="font-medium text-green-400/80">Strengths: </span>
-                                  <ul className="mt-1 ml-4 list-disc space-y-0.5 text-white/80">
-                                    {analysis.strengths.map((strength, i) => (
-                                      <li key={i}>{strength}</li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                              {analysis.weaknesses && analysis.weaknesses.length > 0 && (
-                                <div>
-                                  <span className="font-medium text-orange-400/80">
-                                    Areas to Improve:{' '}
-                                  </span>
-                                  <ul className="mt-1 ml-4 list-disc space-y-0.5 text-white/80">
-                                    {analysis.weaknesses.map((weakness, i) => (
-                                      <li key={i}>{weakness}</li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                              {analysis.recommendations && analysis.recommendations.length > 0 && (
-                                <div>
-                                  <span className="font-medium text-blue-400/80">
-                                    Recommendations:{' '}
-                                  </span>
-                                  <ul className="mt-1 ml-4 list-disc space-y-0.5 text-white/80">
-                                    {analysis.recommendations.map((rec, i) => (
-                                      <li key={i}>{rec}</li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-                    </div>
-                  )}
-                </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {/* AI Changes Manager for this block */}
+                {onBlockChangesUpdate && onBlockRevertChange && (
+                  <div className="mt-3">
+                    <AIChangesManager
+                      editor={previewEditorRefs.current[block.id] || null}
+                      changes={aiChanges.filter(c => c.blockId === block.id)}
+                      onChangesUpdate={changes => {
+                        // Update only changes for this block, keep others
+                        if (onBlockChangesUpdate) {
+                          const otherChanges = aiChanges.filter(c => c.blockId !== block.id);
+                          onBlockChangesUpdate(block.id, [...otherChanges, ...changes]);
+                        }
+                      }}
+                      onRevertChange={(change, newText, highlights) => {
+                        onBlockRevertChange(block.id, change, newText, highlights);
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           );
         })}
-        {/* Add Block Button at the end */}
-        {onAddBlock && (
-          <div className="flex justify-center pt-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onAddBlock}
-              className="h-9 gap-2 border-dashed border-white/20 bg-transparent text-white/60 hover:border-white/40 hover:bg-white/5 hover:text-white"
-              disabled={busy}
-              aria-label="Add new tweet to thread"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Add Tweet to Thread</span>
-            </Button>
-          </div>
-        )}
       </div>
+      {onUseStarter &&
+      starters.length > 0 &&
+      displayBlocks.length === 1 &&
+      !visiblePostText(displayBlocks[0]?.text ?? '').trim() ? (
+        <div className="pt-2">
+          <p className="text-[11px] tracking-[0.16em] text-white/28 uppercase">Start from</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {starters.map(starter => (
+              <button
+                key={starter.id}
+                type="button"
+                onClick={() => onUseStarter(starter.insert)}
+                className="border-t border-white/8 pt-3 text-left hover:border-white/20"
+              >
+                <span className="block text-sm text-white/75">{starter.title}</span>
+                <span className="mt-1 block text-xs leading-5 text-white/35">{starter.hint}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

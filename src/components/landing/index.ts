@@ -1,0 +1,9 @@
+export { Hero } from './Hero';
+export { Features } from './Features';
+export { Scores } from './Scores';
+export { Method } from './Method';
+export { Audience } from './Audience';
+export { SocialProof } from './SocialProof';
+export { Faq } from './Faq';
+export { Pricing } from './Pricing';
+export { CTA } from './CTA';

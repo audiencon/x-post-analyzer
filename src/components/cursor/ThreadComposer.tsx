@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Button } from '@/components/ui/button';
 import type { Editor } from '@tiptap/react';
 import { analyzePost } from '@/actions/analyze';
 import { createAIChange, updateAIChange, type AIChange } from '@/lib/ai-changes-simple';
@@ -14,11 +13,44 @@ import {
   applyHighlightRange,
   insertStreamLineBreak,
   setContentSafely,
-  highlightEntireDoc,
+  storedToEditorHtml,
+  visiblePostText,
 } from '@/lib/editor-helpers';
 import { ThreadPreview } from './ThreadPreview';
-import { ContentTemplates } from './ContentTemplates';
-import { Download, Copy } from 'lucide-react';
+import { SLASH_TAIL_RE } from '@/lib/slash-commands';
+import { pickStudioPlaceholder, pickStudioStarters } from '@/lib/studio-starters';
+import {
+  buildNextPostInstruction,
+  buildRewriteInstruction,
+  isStudioAiKind,
+  isThreadWriteKind,
+  type RewriteKind,
+  type StudioAiKind,
+} from '@/config/prompt';
+
+const FIRST_DRAFT_ID = 'draft-1';
+
+function toastRewriteError(error: unknown) {
+  const message = error instanceof Error ? error.message : '';
+  if (message.toLowerCase().includes('limit reached')) {
+    toast.error('Daily rewrite limit reached', {
+      description: message,
+      duration: 5000,
+    });
+    return;
+  }
+  toast.error('Something went wrong', {
+    description: 'Please try again or check your connection.',
+    duration: 3000,
+  });
+}
+
+function createBlockId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `draft-${Date.now()}`;
+}
 
 interface Block {
   id: string;
@@ -29,14 +61,22 @@ interface ThreadComposerProps {
   externalInsert?: string;
   externalThread?: string[]; // Array of tweet texts for thread insertion
   onInserted?: () => void;
+  onTweetsChange?: (tweets: string[]) => void;
+  onComposeOnX?: () => void;
+  onMarkPosted?: () => void;
+  posted?: boolean;
 }
 
 export function ThreadComposer({
   externalInsert,
   externalThread,
   onInserted,
+  onTweetsChange,
+  onComposeOnX,
+  onMarkPosted,
+  posted = false,
 }: ThreadComposerProps) {
-  const [blocks, setBlocks] = useState<Block[]>([{ id: crypto.randomUUID(), text: '' }]);
+  const [blocks, setBlocks] = useState<Block[]>([{ id: FIRST_DRAFT_ID, text: '' }]);
   const [busy, setBusy] = useState(false);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [analysisById, setAnalysisById] = useState<Record<string, AnalysisResult | null>>({});
@@ -51,7 +91,9 @@ export function ThreadComposer({
   const [editorRef, setEditorRef] = useState<Editor | null>(null);
   const [editorRefsById, setEditorRefsById] = useState<Record<string, Editor>>({});
   const previewEditorRefs = useRef<Record<string, Editor>>({});
-  const [activeBlockId, setActiveBlockId] = useState<string | null>(blocks[0]?.id ?? null);
+  const [starters] = useState(() => pickStudioStarters(6));
+  const [emptyPlaceholder] = useState(() => pickStudioPlaceholder());
+  const [activeBlockId, setActiveBlockId] = useState<string | null>(FIRST_DRAFT_ID);
   const active = activeBlockId ?? blocks[0]?.id ?? null;
   const processedThreadRef = useRef<string>('');
   const processedInsertRef = useRef<string>('');
@@ -64,26 +106,29 @@ export function ThreadComposer({
     setBlocks(prev => prev.map(b => (b.id === id ? { ...b, text } : b)));
   }, []);
 
-  const addBlock = useCallback(() => {
-    const newBlock: Block = { id: crypto.randomUUID(), text: '' };
+  useEffect(() => {
+    onTweetsChange?.(blocks.map(block => block.text));
+  }, [blocks, onTweetsChange]);
+
+  const addBlock = useCallback((presetId?: string) => {
+    const newBlock: Block = { id: presetId ?? createBlockId(), text: '' };
     setBlocks(prev => [...prev, newBlock]);
-    // Set the new block as active
     setActiveBlockId(newBlock.id);
-    // Scroll to the new block after a short delay to allow it to render
     setTimeout(() => {
       const blockElement = document.querySelector(`[data-block-id="${newBlock.id}"]`);
       if (blockElement) {
         blockElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }, 100);
+    return newBlock.id;
   }, []);
 
   const removeBlock = useCallback(
     (id: string) => {
       // Don't allow removing the last block if it's the only one
       if (blocks.length <= 1) {
-        toast.error('Cannot remove the last tweet', {
-          description: 'You need at least one tweet in your thread.',
+        toast.error('Keep one post', {
+          description: 'A thread needs at least one post.',
           duration: 2000,
         });
         return;
@@ -130,8 +175,8 @@ export function ThreadComposer({
 
   const copyThread = () => {
     const threadText = blocks
-      .filter(b => b.text.trim())
-      .map((b, idx) => `${idx + 1}/${blocks.filter(bl => bl.text.trim()).length} ${b.text}`)
+      .filter(b => visiblePostText(b.text).trim())
+      .map((b, idx, list) => `${idx + 1}/${list.length} ${visiblePostText(b.text)}`)
       .join('\n\n');
     navigator.clipboard.writeText(threadText);
     toast.success('Thread copied to clipboard', { duration: 2000 });
@@ -139,8 +184,8 @@ export function ThreadComposer({
 
   const downloadThread = () => {
     const threadText = blocks
-      .filter(b => b.text.trim())
-      .map((b, idx) => `${idx + 1}/${blocks.filter(bl => bl.text.trim()).length} ${b.text}`)
+      .filter(b => visiblePostText(b.text).trim())
+      .map((b, idx, list) => `${idx + 1}/${list.length} ${visiblePostText(b.text)}`)
       .join('\n\n');
     const blob = new Blob([threadText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -154,59 +199,81 @@ export function ThreadComposer({
     toast.success('Thread downloaded', { duration: 2000 });
   };
 
-  const applyTemplate = (template: string) => {
-    const targetId = active ?? blocks[0]?.id;
-    if (!targetId) return;
-    const current = blocks.find(b => b.id === targetId)?.text ?? '';
-    const next = current ? current + template : template;
-    update(targetId, next);
-    // Focus editor
-    setTimeout(() => {
-      editorRef?.commands.focus();
-    }, 100);
-  };
-
-  const applyTransform = async (
-    id: string,
-    kind: 'improve' | 'extend' | 'short' | 'hook' | 'punchy' | 'clarify' | 'formal' | 'casual',
-    editorOverride?: Editor
-  ) => {
+  const applyTransform = async (id: string, kind: StudioAiKind, editorOverride?: Editor) => {
     const block = blocks.find(b => b.id === id);
     if (!block) return;
-    const base = block.text
-      .replace(/\/(improve|extend|short|hook|punchy|clarify|formal|casual)\b\s*$/i, '')
+
+    const liveEditor =
+      editorOverride ||
+      previewEditorRefs.current[id] ||
+      editorRefsById[id] ||
+      (id === active ? editorRef : null);
+    const liveText = (liveEditor ? liveEditor.getText() : visiblePostText(block.text))
+      .replace(SLASH_TAIL_RE, '')
       .trim();
-    if (!base) return;
+    const index = blocks.findIndex(item => item.id === id);
+    const prior = blocks
+      .slice(0, Math.max(0, index))
+      .map(item => visiblePostText(item.text).replace(SLASH_TAIL_RE, '').trim())
+      .filter(Boolean);
+    const writeNext = isThreadWriteKind(kind) || (!liveText && prior.length > 0);
+
+    if (!liveText && prior.length === 0) {
+      toast.error('Write the line first.');
+      return;
+    }
+
+    let targetId = id;
+    let blockEditor: Editor | null = liveEditor;
+    let contextPosts = prior;
+    let base = liveText;
+
+    if (writeNext) {
+      if (liveText) {
+        contextPosts = [...prior, liveText];
+        const nextEmpty = blocks
+          .slice(index + 1)
+          .find(item => !visiblePostText(item.text).replace(SLASH_TAIL_RE, '').trim());
+        if (nextEmpty) {
+          targetId = nextEmpty.id;
+          blockEditor =
+            previewEditorRefs.current[nextEmpty.id] || editorRefsById[nextEmpty.id] || null;
+        } else {
+          targetId = addBlock();
+          blockEditor = null;
+          for (let attempt = 0; attempt < 16 && !blockEditor; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            blockEditor = previewEditorRefs.current[targetId] || editorRefsById[targetId] || null;
+          }
+        }
+        setActiveBlockId(targetId);
+        base = '';
+      }
+    }
+
     setBusy(true);
     setLoadingAction(kind);
     try {
-      let instruction = '';
-      if (kind === 'improve') {
-        instruction =
-          'Improve clarity, flow, and engagement. Keep original meaning and tone. Make it punchy and compelling for X. Keep within 240-280 characters if possible.';
-      } else if (kind === 'extend') {
-        instruction =
-          'Extend and enrich the post with one or two crisp details or examples. Keep it engaging and skimmable. Aim for 240-280 characters.';
-      } else if (kind === 'short') {
-        instruction =
-          'Make it concise and impactful under 180 characters. Preserve the key message and make it scroll-stopping.';
-      } else if (kind === 'hook') {
-        instruction =
-          'Rewrite to maximize the opening hook. Lead with tension, curiosity, or a bold claim. One strong opening line.';
-      } else if (kind === 'punchy') {
-        instruction =
-          'Increase energy, remove filler, choose vivid words. Keep it crisp and punchy for X feed.';
-      } else if (kind === 'clarify') {
-        instruction =
-          'Rewrite to be simpler and clearer for a broad audience. Remove jargon and reduce clauses.';
-      } else if (kind === 'formal') {
-        instruction =
-          'Rewrite in a more formal, professional tone while staying concise and engaging for X.';
-      } else if (kind === 'casual') {
-        instruction =
-          'Rewrite in a more casual, friendly tone with light personality. Avoid slang overload.';
-      }
-      const prompt = `You are editing a tweet for X performance.
+      const prompt = writeNext
+        ? `You are writing the NEXT post in an X thread. Previous posts already exist. Do not repeat them.
+
+<general_rules>
+- Output ONLY the next post. Do not explain anything.
+- No numbering (2/, 3/) unless the previous posts already use it.
+- Advance the argument. Do not recap.
+- Short lines. Max 1 emoji. No hashtags unless they were already in the thread.
+</general_rules>
+
+<thread_so_far>
+${contextPosts.map((post, postIndex) => `${postIndex + 1}.\n${post}`).join('\n\n')}
+</thread_so_far>
+
+<instruction>
+${buildNextPostInstruction(kind)}
+</instruction>
+
+Return ONLY the next post text and append a trailing *.`
+        : `You are editing a tweet for X performance.
 
 <general_rules>
 - Output ONLY the final tweet text. Do not explain anything.
@@ -217,7 +284,7 @@ export function ThreadComposer({
 </general_rules>
 
 <instruction>
-${instruction}
+${buildRewriteInstruction(kind as RewriteKind)}
 </instruction>
 
 <original>
@@ -226,16 +293,17 @@ ${base}
 
 Return ONLY the rewritten tweet text and append a trailing *.`;
 
-      // Create AI change record for streaming - store the full original text
-      const aiChange = createAIChange('modified', block.text, '', kind, id, 0, 0, true);
+      const aiChange = createAIChange(
+        'modified',
+        base || block.text,
+        '',
+        kind,
+        targetId,
+        0,
+        0,
+        true
+      );
       setAiChanges(prev => [...prev, aiChange]);
-
-      // Get the correct editor for this block (prefer override, then preview, then main editor)
-      const blockEditor =
-        editorOverride ||
-        previewEditorRefs.current[id] ||
-        editorRefsById[id] ||
-        (id === active ? editorRef : null);
 
       // Clear the editor content and start streaming
       if (blockEditor) {
@@ -336,19 +404,17 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
             try {
               const html = textToHtmlWithParagraphs(processedFinalText);
               setContentSafely(blockEditor, html);
-              highlightEntireDoc(blockEditor);
-
-              // Update highlights state for preview editor
-              const docSize = blockEditor.state.doc.content.size;
-              setHighlightsById(prev => ({
-                ...prev,
-                [id]: [{ start: 1, end: Math.max(1, docSize) }],
-              }));
+              blockEditor.commands.unsetHighlight();
+              blockEditor.commands.focus('end');
+              setHighlightsById(prev => {
+                const next = { ...prev };
+                delete next[targetId];
+                return next;
+              });
             } catch {}
           }
 
-          // Update the block with final text
-          update(id, processedFinalText);
+          update(targetId, processedFinalText);
         },
         onError: (error: Error) => {
           // Remove the failed change
@@ -359,35 +425,13 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
             blockEditor.commands.setContent(base);
           }
 
-          if (error.message.includes('Usage limit reached')) {
-            toast.error('Usage limit reached', {
-              description:
-                "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
-              duration: 5000,
-            });
-          } else {
-            toast.error('Streaming failed', {
-              description: 'Please try again or check your connection.',
-              duration: 3000,
-            });
-          }
+          toastRewriteError(error);
         },
       });
 
       await stream.streamResponse(prompt);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Usage limit reached')) {
-        toast.error('Usage limit reached', {
-          description:
-            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
-          duration: 5000,
-        });
-      } else {
-        toast.error('Something went wrong', {
-          description: 'Please try again or check your connection.',
-          duration: 3000,
-        });
-      }
+      toastRewriteError(error);
     } finally {
       setBusy(false);
       setLoadingAction(null);
@@ -423,7 +467,7 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
 
     // Clear existing blocks and create new ones for the thread
     const newBlocks = externalThread.map(tweet => ({
-      id: crypto.randomUUID(),
+      id: createBlockId(),
       text: tweet.trim(),
     }));
 
@@ -440,7 +484,7 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
 
     // Show success message
     toast.success('Thread applied', {
-      description: `Applied ${externalThread.length} tweet${externalThread.length !== 1 ? 's' : ''} to composer.`,
+      description: `Applied ${externalThread.length} ${externalThread.length === 1 ? 'post' : 'posts'}.`,
       duration: 3000,
     });
 
@@ -452,81 +496,52 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalThread, busy]);
 
-  // Handle external insertions (e.g., from IdeasSidebar) without setting state during render
   useEffect(() => {
-    // Only process if the content actually changed
     if (prevExternalInsertRef.current === externalInsert) return;
     prevExternalInsertRef.current = externalInsert;
 
-    // Reset ref when insert is cleared
     if (!externalInsert) {
-      if (processedInsertRef.current !== '') {
-        processedInsertRef.current = '';
-      }
+      processedInsertRef.current = '';
       isProcessingInsertRef.current = false;
       return;
     }
 
-    if (busy || externalThread || isProcessingInsertRef.current) return; // Don't handle if thread is being inserted
-
-    // Check if we've already processed this exact insert
+    if (busy || externalThread || isProcessingInsertRef.current) return;
     if (processedInsertRef.current === externalInsert) return;
 
-    // Mark as processing to prevent concurrent executions
     isProcessingInsertRef.current = true;
     processedInsertRef.current = externalInsert;
 
-    // Use a function to get current blocks state to avoid dependency issues
-    setBlocks(currentBlocks => {
-      const currentActive = currentBlocks[0]?.id ?? null;
-      const targetId = currentActive;
-      if (!targetId) {
-        isProcessingInsertRef.current = false;
-        return currentBlocks;
-      }
+    const targetId = activeBlockId ?? blocks[0]?.id;
+    if (!targetId) {
+      isProcessingInsertRef.current = false;
+      return;
+    }
 
-      const currentBlock = currentBlocks.find(b => b.id === targetId);
-      if (!currentBlock) {
-        isProcessingInsertRef.current = false;
-        return currentBlocks;
-      }
+    const html = storedToEditorHtml(externalInsert);
+    const blockEditor =
+      previewEditorRefs.current[targetId] || editorRefsById[targetId] || editorRef;
 
-      // Replace the content instead of appending
-      const next = externalInsert;
+    if (blockEditor) {
+      setContentSafely(blockEditor, html);
+      blockEditor.commands.unsetHighlight();
+      blockEditor.commands.focus('end');
+    }
 
-      // Replace all blocks with a single block containing the new content
-      const updatedBlocks = [{ id: targetId, text: next }];
-
-      // Clear all other state associated with removed blocks
-      setAnalysisById({});
-      setEditorRefsById(prev => {
-        const next = { ...prev };
-        // Keep only the target block's editor ref
-        Object.keys(next).forEach(key => {
-          if (key !== targetId) {
-            delete next[key];
-          }
-        });
-        return next;
-      });
-      setHighlightsById({});
-      setSelectionById({});
-      setAiChanges([]);
-      setActiveBlockId(targetId);
-
-      // Focus the editor after state update
-      setTimeout(() => {
-        const blockEditor = editorRefsById[targetId] || editorRef;
-        if (blockEditor) {
-          blockEditor.commands.focus();
-          blockEditor.commands.setTextSelection(blockEditor.state.doc.content.size);
-        }
-        isProcessingInsertRef.current = false;
-        onInserted?.();
-      }, 50);
-
-      return updatedBlocks;
+    setBlocks(current =>
+      current.map(block => (block.id === targetId ? { ...block, text: html } : block))
+    );
+    setHighlightsById(prev => {
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
     });
+    setSelectionById(prev => ({ ...prev, [targetId]: null }));
+    setActiveBlockId(targetId);
+
+    toast.success('In the draft.');
+    isProcessingInsertRef.current = false;
+    onInserted?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalInsert, busy, externalThread]);
 
@@ -538,15 +553,13 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
     try {
       const res = await analyzePost(block.text);
       setAnalysisById(prev => ({ ...prev, [id]: res }));
-      toast.success('Analysis complete', {
-        description: 'Your post has been analyzed successfully.',
-        duration: 2000,
+      toast.success('Roast is on the post.', {
+        description: 'That used one of today’s roasts.',
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Usage limit reached')) {
-        toast.error('Usage limit reached', {
-          description:
-            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
+      if (error instanceof Error && error.message.toLowerCase().includes('limit reached')) {
+        toast.error('Daily free limit reached', {
+          description: error.message,
           duration: 5000,
         });
       } else {
@@ -600,13 +613,18 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
       return;
     }
 
-    // TipTap uses 1-based coordinates, but slice() uses 0-based, so we need to adjust
     const start = Math.max(0, sel.start - 1);
     const end = Math.max(0, sel.end - 1);
-
-    const before = block.text.slice(0, start);
-    const target = block.text.slice(start, end);
-    const after = block.text.slice(end);
+    const liveEditor =
+      editorOverride ||
+      previewEditorRefs.current[id] ||
+      editorRefsById[id] ||
+      (id === active ? editorRef : null);
+    const target = liveEditor
+      ? liveEditor.state.doc.textBetween(sel.start, sel.end)
+      : visiblePostText(block.text).slice(start, end);
+    const before = visiblePostText(block.text).slice(0, start);
+    const after = visiblePostText(block.text).slice(end);
     setBusy(true);
     setLoadingAction(kind);
     try {
@@ -820,35 +838,13 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
             blockEditor.commands.setContent(block.text);
           }
 
-          if (error.message.includes('Usage limit reached')) {
-            toast.error('Usage limit reached', {
-              description:
-                "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
-              duration: 5000,
-            });
-          } else {
-            toast.error('Streaming failed', {
-              description: 'Please try again or check your connection.',
-              duration: 3000,
-            });
-          }
+          toastRewriteError(error);
         },
       });
 
       await stream.streamResponse(prompt);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Usage limit reached')) {
-        toast.error('Usage limit reached', {
-          description:
-            "You've reached the limit of 10 requests per hour. Please try again later or add your own API key for unlimited usage.",
-          duration: 5000,
-        });
-      } else {
-        toast.error('Something went wrong', {
-          description: 'Please try again or check your connection.',
-          duration: 3000,
-        });
-      }
+      toastRewriteError(error);
     } finally {
       setBusy(false);
       setLoadingAction(null);
@@ -857,36 +853,6 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
 
   return (
     <div className="flex w-full flex-col">
-      {/* Top Toolbar */}
-      <div className="mb-4 flex flex-col gap-3 rounded-lg border border-white/10 bg-[#0e0e0e] p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <ContentTemplates onSelect={applyTemplate} />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={copyThread}
-            className="h-8 text-xs"
-            disabled={!blocks.some(b => b.text.trim())}
-          >
-            <Copy className="h-3.5 w-3.5" />
-            <span className="ml-1.5">Copy</span>
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={downloadThread}
-            className="h-8 text-xs"
-            disabled={!blocks.some(b => b.text.trim())}
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span className="ml-1.5">Download</span>
-          </Button>
-        </div>
-      </div>
-
-      {/* Preview Row - Always visible */}
       <div className="mb-4">
         <ThreadPreview
           blocks={blocks}
@@ -896,6 +862,18 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
           highlightsById={highlightsById}
           aiChanges={aiChanges}
           analysisById={analysisById}
+          onCopy={copyThread}
+          onDownload={downloadThread}
+          onComposeOnX={onComposeOnX}
+          onMarkPosted={onMarkPosted}
+          posted={posted}
+          starters={starters}
+          emptyPlaceholder={emptyPlaceholder}
+          onUseStarter={insert => {
+            const target = blocks.find(block => !visiblePostText(block.text).trim()) ?? blocks[0];
+            if (!target) return;
+            update(target.id, storedToEditorHtml(insert));
+          }}
           onAddBlock={addBlock}
           onRemoveBlock={removeBlock}
           onBlockChangesUpdate={(blockId, changes) => {
@@ -961,14 +939,7 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
             }
           }}
           onBlockUpdate={(blockId, text) => {
-            // Update the block text
             update(blockId, text);
-
-            // Update the editor content if it exists (in the main editor area)
-            const blockEditor = editorRefsById[blockId] || (blockId === active ? editorRef : null);
-            if (blockEditor) {
-              blockEditor.commands.setContent(text);
-            }
           }}
           onBlockAnalyze={blockId => {
             runAnalyzeBlock(blockId);
@@ -977,20 +948,11 @@ Return ONLY the rewritten tweet text and append a trailing *.`;
             setSelectionById(prev => ({ ...prev, [blockId]: { start, end } }));
           }}
           onBlockSlashCommand={(blockId, command, editor) => {
-            const cmd = command as
-              | 'improve'
-              | 'extend'
-              | 'short'
-              | 'hook'
-              | 'punchy'
-              | 'clarify'
-              | 'formal'
-              | 'casual';
-            // Store preview editor ref if provided
+            if (!isStudioAiKind(command)) return;
             if (editor) {
               previewEditorRefs.current[blockId] = editor;
             }
-            applyTransform(blockId, cmd, editor);
+            applyTransform(blockId, command, editor);
           }}
           onBlockAiAction={(blockId, kind, editor) => {
             const actionKind = kind as

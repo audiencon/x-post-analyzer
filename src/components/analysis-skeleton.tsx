@@ -1,118 +1,40 @@
-import { Skeleton } from '@/components/ui/skeleton';
-
-export function AnalysisSkeleton() {
+export function AnalysisSkeleton({ streamedRoast }: { streamedRoast?: string }) {
   return (
-    <div className="relative mx-auto w-full max-w-lg space-y-6 overflow-hidden rounded-xl border border-white/10 bg-[#1a1a1a] p-6">
-      {/* Content */}
-      <div className="relative z-10">
-        {/* Global Score */}
-        <div className="mb-8 flex flex-col items-center justify-center">
-          <Skeleton className="bg-accent/10 mb-2 h-16 w-24" /> {/* For the percentage */}
-          <Skeleton className="bg-accent/10 h-4 w-16" /> {/* For "Global Score" text */}
-          <Skeleton className="bg-accent/10 mt-4 h-4 w-full" /> {/* For the post content */}
-        </div>
-
-        {/* Score Bars */}
-        <div className="space-y-4">
-          <div>
-            <div className="mb-2 flex justify-between">
-              <Skeleton className="bg-accent/10 h-4 w-20" /> {/* "Engagement" label */}
-              <Skeleton className="bg-accent/10 h-4 w-12" /> {/* Percentage */}
-            </div>
-            <Skeleton className="h-1.5 w-full bg-[#2a2a2a]" />
-          </div>
-
-          <div>
-            <div className="mb-2 flex justify-between">
-              <Skeleton className="bg-accent/10 h-4 w-20" /> {/* "Friendliness" label */}
-              <Skeleton className="bg-accent/10 h-4 w-12" /> {/* Percentage */}
-            </div>
-            <Skeleton className="h-1.5 w-full bg-[#2a2a2a]" />
-          </div>
-
-          <div>
-            <div className="mb-2 flex justify-between">
-              <Skeleton className="bg-accent/10 h-4 w-20" /> {/* "Virality" label */}
-              <Skeleton className="bg-accent/10 h-4 w-12" /> {/* Percentage */}
-            </div>
-            <Skeleton className="h-1.5 w-full bg-[#2a2a2a]" />
-          </div>
-        </div>
-
-        {/* Analytics Grid */}
-        <div className="mt-6 grid grid-cols-2 gap-4 border-t border-[#2a2a2a] pt-6">
-          {/* Readability */}
-          <div className="flex items-start gap-3">
-            <Skeleton className="bg-accent/10 mt-1 h-5 w-5 rounded-full" /> {/* Icon */}
-            <div>
-              <Skeleton className="bg-accent/10 mb-1 h-4 w-32" /> {/* Title */}
-              <Skeleton className="bg-accent/10 h-3 w-full" /> {/* Description line 1 */}
-            </div>
-          </div>
-
-          {/* Sentiment */}
-          <div className="flex items-start gap-3">
-            <Skeleton className="bg-accent/10 mt-1 h-5 w-5 rounded-full" /> {/* Icon */}
-            <div>
-              <Skeleton className="bg-accent/10 mb-1 h-4 w-32" /> {/* Title */}
-              <Skeleton className="bg-accent/10 h-3 w-full" /> {/* Description line 1 */}
-              <Skeleton className="bg-accent/10 mt-1 h-3 w-3/4" /> {/* Description line 2 */}
-            </div>
-          </div>
-
-          {/* Best Posting Time */}
-          <div className="flex items-start gap-3">
-            <Skeleton className="bg-accent/10 mt-1 h-5 w-5 rounded-full" /> {/* Icon */}
-            <div>
-              <Skeleton className="bg-accent/10 mb-1 h-4 w-32" /> {/* Title */}
-              <Skeleton className="bg-accent/10 h-3 w-full" /> {/* Time */}
-              <Skeleton className="bg-accent/10 mt-1 h-3 w-3/4" /> {/* Peak days */}
-            </div>
-          </div>
-
-          {/* Hashtags */}
-          <div className="flex items-start gap-3">
-            <Skeleton className="bg-accent/10 mt-1 h-5 w-5 rounded-full" /> {/* Icon */}
-            <div>
-              <Skeleton className="bg-accent/10 mb-1 h-4 w-32" /> {/* Title */}
-              <Skeleton className="bg-accent/10 h-3 w-full" /> {/* Hashtags */}
-              <Skeleton className="bg-accent/10 mt-1 h-3 w-3/4" /> {/* Reach */}
-            </div>
-          </div>
-
-          {/* Target Audience */}
-          <div className="flex items-start gap-3">
-            <Skeleton className="bg-accent/10 mt-1 h-5 w-5 rounded-full" /> {/* Icon */}
-            <div>
-              <Skeleton className="bg-accent/10 mb-1 h-4 w-32" /> {/* Title */}
-              <Skeleton className="bg-accent/10 h-3 w-full" /> {/* Primary audience */}
-              <Skeleton className="bg-accent/10 mt-1 h-3 w-3/4" /> {/* Interests */}
-            </div>
-          </div>
-
-          {/* Keywords */}
-          <div className="flex items-start gap-3">
-            <Skeleton className="bg-accent/10 mt-1 h-5 w-5 rounded-full" /> {/* Icon */}
-            <div>
-              <Skeleton className="bg-accent/10 mb-1 h-4 w-32" /> {/* Title */}
-              <Skeleton className="bg-accent/10 h-3 w-full" /> {/* Optimal keywords */}
-              <Skeleton className="bg-accent/10 mt-1 h-3 w-3/4" /> {/* Trending keywords */}
-            </div>
-          </div>
-        </div>
+    <div className="w-full">
+      <div className="flex items-baseline justify-between gap-6">
+        <p className="text-sm text-white/25">Another draft</p>
+        <p className="text-[11px] tracking-[0.18em] text-white/22 uppercase">Reading</p>
       </div>
-    </div>
-  );
-}
 
-export function SuggestionsSkeleton() {
-  return (
-    <div className="relative mx-auto grid max-w-6xl grid-cols-3 gap-4">
-      {[...Array(3)].map((_, i) => (
-        <div key={i} className="rounded-xl border border-white/10 bg-[#1a1a1a] p-4">
-          <Skeleton className="bg-accent/10 h-96 w-full" />
+      <section className="mt-10 border-l-2 border-ink pl-6 sm:pl-8">
+        <p className="text-[11px] tracking-[0.2em] text-ink-soft uppercase">The roast</p>
+        {streamedRoast ? (
+          <p className="font-heading mt-5 max-w-[22ch] text-[clamp(2.15rem,4.6vw,4rem)] leading-[1.06] tracking-tight text-ink-soft sm:max-w-[28ch]">
+            {streamedRoast}
+          </p>
+        ) : (
+          <p className="font-heading mt-5 text-[clamp(1.6rem,3vw,2.4rem)] text-white/28">
+            Reading the draft…
+          </p>
+        )}
+      </section>
+
+      <section className="mt-14 grid items-end gap-10 border-y border-rule py-10 sm:grid-cols-[auto_1fr] sm:gap-16">
+        <div>
+          <p className="font-heading text-[5.5rem] leading-none tracking-tight text-white/10 sm:text-[7rem]">
+            —
+          </p>
+          <p className="mt-2 text-[11px] tracking-[0.18em] text-white/22 uppercase">Scoring</p>
         </div>
-      ))}
+        <div className="grid gap-8 sm:grid-cols-3">
+          {['Engage', 'Warmth', 'Viral'].map(label => (
+            <div key={label}>
+              <p className="text-[11px] tracking-[0.16em] text-white/25 uppercase">{label}</p>
+              <div className="mt-4 h-px bg-white/8" />
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

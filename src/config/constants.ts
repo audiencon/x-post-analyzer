@@ -1,4 +1,4 @@
-export const MAX_REQUESTS = 20;
-export const WINDOW_MS = 60 * 60 * 1000; // 1 hour
-export const USAGE_STORAGE_KEY = 'apiUsageData';
-export const MAX_LENGTH = 280; // X's character limit
+export const MAX_REQUESTS = 10;
+export const WINDOW_MS = 24 * 60 * 60 * 1000; // 1 day, kept for client toast copy
+export const MAX_LENGTH = 4000;
+export const HOME_POST_MAX = 280;

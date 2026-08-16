@@ -2,42 +2,28 @@
 
 import { motion } from 'framer-motion';
 
-const fadeIn = {
-  initial: { opacity: 0, y: 20 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -20 },
-  transition: { duration: 0.5 },
-};
-
 export function FormHeader() {
   return (
-    <motion.div key="header" {...fadeIn} className="relative mb-8 space-y-4 text-center">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="relative mx-auto mb-8 h-16 w-16"
-      >
-        <div className="bg-primary/20 absolute inset-0 rounded-2xl blur-xl" />
-        <div className="relative rounded-2xl bg-white p-4 shadow-lg">
-          <span className="text-2xl font-bold text-black">𝕏</span>
-        </div>
-      </motion.div>
-      <motion.h1
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-        className="mb-4 text-4xl font-bold tracking-tight md:text-6xl"
-      >
-        𝕏 Post Roast
-      </motion.h1>
-      <motion.p
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-        className="text-muted-foreground mx-auto max-w-2xl text-xl"
-      >
-        Get AI-powered insights to improve your posts&apos; engagement and reach
-      </motion.p>
+    <motion.div
+      key="header"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+      className="mx-auto mb-10 w-full max-w-3xl"
+    >
+      <p className="text-[11px] tracking-[0.22em] text-ink-soft uppercase">
+        Roast · Original Content Rewards
+      </p>
+      <h1 className="font-heading mt-3 text-[clamp(2.25rem,5vw,3.75rem)] leading-[1.05] tracking-tight">
+        Paste the draft.
+        <br />
+        Take the hit.
+      </h1>
+      <p className="mt-4 max-w-xl text-lg leading-relaxed text-white/55">
+        We read it the way X pays now: Home Timeline, half the post visible, original work. Sign in
+        to run the roast. Ten free a day.
+      </p>
     </motion.div>
   );
 }

@@ -1,58 +1,253 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { ThreadComposer } from '@/components/cursor/ThreadComposer';
 import { StudioSidebar } from '@/components/cursor/StudioSidebar';
+import { StudioDrafts } from '@/components/cursor/StudioDrafts';
 import { CommandPalette } from '@/components/cursor/CommandPalette';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import Link from 'next/link';
-import { ArrowLeft, Sparkles, MessageSquare, X } from 'lucide-react';
-import { PostPreviewSpot } from '@/components/spots/post-preview-spot';
+import { markThreadPosted, saveThread } from '@/actions/threads';
+import { authClient } from '@/lib/auth-client';
+import { isScratchDraft, takeStudioDraft, type StudioDraft, type StudioScores } from '@/lib/studio-draft';
+import { pickStudioStarters } from '@/lib/studio-starters';
+import { visiblePostText } from '@/lib/editor-helpers';
+import { buildDesk, type DraftDesk } from '@/lib/x-monetization';
+import { composeOnXUrl, firstPostText, restPostsText } from '@/lib/x-compose';
+import { toast } from 'sonner';
 
 export function CursorClient() {
+  const { data: session } = authClient.useSession();
   const [externalInsert, setExternalInsert] = useState('');
   const [externalThread, setExternalThread] = useState<string[] | undefined>(undefined);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [draftsOpen, setDraftsOpen] = useState(true);
+  const [critiqueOpen, setCritiqueOpen] = useState(true);
+  const [composerKey, setComposerKey] = useState('new');
+  const [threadId, setThreadId] = useState<string | undefined>();
+  const [tweets, setTweets] = useState<string[]>(['']);
+  const [roast, setRoast] = useState<string | undefined>();
+  const [scores, setScores] = useState<StudioScores | undefined>();
+  const [desk, setDesk] = useState<DraftDesk | undefined>();
+  const [goal, setGoal] = useState<string | undefined>();
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [postedAt, setPostedAt] = useState<Date | null>(null);
+  const [saveCode, setSaveCode] = useState<string | null>(null);
+  const hydratedRef = useRef(false);
+  const capReachedRef = useRef(false);
+  const paletteStarter = useMemo(() => pickStudioStarters(1)[0], []);
+
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+    const draft = takeStudioDraft();
+    if (!draft) return;
+    setExternalThread(draft.tweets);
+    setTweets(draft.tweets);
+    setRoast(draft.roast);
+    setScores(draft.scores);
+    setDesk(draft.desk ?? buildDesk(draft.tweets.map(visiblePostText).join('\n\n---\n\n')));
+    setGoal(draft.goal);
+    if (draft.threadId) setThreadId(draft.threadId);
+    setPostedAt(draft.postedAt ? new Date(draft.postedAt) : null);
+    setComposerKey(draft.threadId ?? `roast-${Date.now()}`);
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    if (isScratchDraft(tweets)) return;
+    if (!threadId && capReachedRef.current) return;
+
+    const handle = window.setTimeout(async () => {
+      setSaveState('saving');
+      setSaveError(null);
+      setSaveCode(null);
+      const saved = await saveThread({
+        id: threadId,
+        tweets,
+        roast,
+        scores,
+      });
+      if (!saved.ok) {
+        if (saved.code === 'scratch') {
+          setSaveState('idle');
+          return;
+        }
+        if (saved.code === 'cap') capReachedRef.current = true;
+        setSaveState('error');
+        setSaveError(saved.error);
+        setSaveCode(saved.code);
+        return;
+      }
+      setThreadId(saved.id);
+      setSaveState('saved');
+    }, 1600);
+
+    return () => window.clearTimeout(handle);
+  }, [tweets, threadId, roast, scores, session?.user]);
+
+  const loadDraft = (id: string, draft: StudioDraft) => {
+    setThreadId(id);
+    setExternalThread(draft.tweets);
+    setTweets(draft.tweets);
+    setRoast(draft.roast);
+    setScores(draft.scores);
+    setDesk(draft.desk ?? buildDesk(draft.tweets.map(visiblePostText).join('\n\n---\n\n')));
+    setGoal(draft.goal);
+    setPostedAt(draft.postedAt ? new Date(draft.postedAt) : null);
+    setComposerKey(id);
+    setSaveState('saved');
+  };
+
+  const newDraft = () => {
+    setThreadId(undefined);
+    setExternalThread(['']);
+    setTweets(['']);
+    setRoast(undefined);
+    setScores(undefined);
+    setDesk(undefined);
+    setGoal(undefined);
+    setPostedAt(null);
+    setComposerKey(`new-${Date.now()}`);
+    setSaveState('idle');
+    setSaveError(null);
+    setSaveCode(null);
+  };
+
+  const composeOnX = () => {
+    const text = firstPostText(tweets);
+    if (!text) return;
+    const rest = restPostsText(tweets);
+    window.open(composeOnXUrl(text), '_blank', 'noopener,noreferrer');
+    if (rest.length === 0) return;
+    void navigator.clipboard.writeText(rest.join('\n\n---\n\n')).then(
+      () => {
+        toast('First post is on X. The rest is copied.', {
+          description:
+            rest.length === 1
+              ? 'Paste the next post as a reply.'
+              : `Paste the other ${rest.length} posts as replies.`,
+        });
+      },
+      () => {
+        toast('First post is on X.', {
+          description: 'Copy the other posts from Studio. X only takes the first one.',
+        });
+      }
+    );
+  };
+
+  const togglePosted = async () => {
+    if (!session?.user) {
+      setSaveError('Sign in to mark a draft as posted.');
+      return;
+    }
+
+    try {
+      let id = threadId;
+      if (!id) {
+        const saved = await saveThread({ tweets, roast, scores });
+        if (!saved.ok) {
+          setSaveState('error');
+          setSaveError(saved.error);
+          setSaveCode(saved.code);
+          return;
+        }
+        id = saved.id;
+        setThreadId(id);
+      }
+      const next = await markThreadPosted(id, !postedAt);
+      setPostedAt(next.postedAt);
+      setSaveState('saved');
+    } catch (error) {
+      setSaveState('error');
+      setSaveError(error instanceof Error ? error.message : 'Could not mark as posted.');
+    }
+  };
 
   const actions = useMemo(
     () => [
       {
         id: 'focus-composer',
-        title: 'Focus Composer',
-        hint: 'Focus the text editor',
+        title: 'Focus composer',
+        hint: 'Write the next line',
         onRun: () => {
-          // Focus the first editor
           const editor = document.querySelector('[contenteditable="true"]') as HTMLElement;
-          if (editor) {
-            editor.focus();
-            // Scroll into view if needed
-            editor.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
+          editor?.focus();
         },
       },
       {
         id: 'toggle-sidebar',
-        title: sidebarOpen ? 'Close Sidebar' : 'Open Sidebar',
-        hint: 'Toggle AI assistant sidebar',
-        onRun: () => setSidebarOpen(prev => !prev),
+        title: critiqueOpen ? 'Hide critique' : 'Show critique',
+        hint: ']',
+        onRun: () => setCritiqueOpen(prev => !prev),
+      },
+      {
+        id: 'toggle-drafts',
+        title: draftsOpen ? 'Hide drafts' : 'Show drafts',
+        hint: '[',
+        onRun: () => setDraftsOpen(prev => !prev),
+      },
+      {
+        id: 'new-draft',
+        title: 'New draft',
+        hint: 'N',
+        onRun: newDraft,
+      },
+      {
+        id: 'compose-x',
+        title: 'Compose on X',
+        hint: 'First post',
+        onRun: composeOnX,
+      },
+      {
+        id: 'mark-posted',
+        title: postedAt ? 'Unmark posted' : 'Mark as posted',
+        onRun: () => {
+          void togglePosted();
+        },
+      },
+      ...(paletteStarter
+        ? [
+            {
+              id: 'random-starter',
+              title: `Start: ${paletteStarter.title}`,
+              hint: 'Opener',
+              onRun: () => setExternalInsert(paletteStarter.insert),
+            },
+          ]
+        : []),
+      {
+        id: 'go-roast',
+        title: 'Roast a draft',
+        hint: 'Roast',
+        onRun: () => {
+          window.location.href = '/roast';
+        },
+      },
+      {
+        id: 'go-desk',
+        title: 'Open Desk',
+        hint: 'Desk',
+        onRun: () => {
+          window.location.href = '/desk';
+        },
       },
     ],
-    [sidebarOpen]
+    [critiqueOpen, draftsOpen, paletteStarter, postedAt, tweets, threadId]
   );
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl/Cmd + K for command palette
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         setPaletteOpen(prev => !prev);
         return;
       }
 
-      // Escape to close dialogs
       if (e.key === 'Escape') {
         if (sidebarOpen) {
           setSidebarOpen(false);
@@ -64,15 +259,32 @@ export function CursorClient() {
         }
       }
 
-      // Don't interfere if user is typing in an input/textarea
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
         return;
       }
 
-      // B key to toggle sidebar (when not in input)
       if (e.key === 'b' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
-        setSidebarOpen(prev => !prev);
+        if (window.matchMedia('(min-width: 1024px)').matches) {
+          setCritiqueOpen(prev => !prev);
+        } else {
+          setSidebarOpen(prev => !prev);
+        }
+      }
+
+      if (e.key === 'n' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        newDraft();
+      }
+
+      if (e.key === '[' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setDraftsOpen(prev => !prev);
+      }
+
+      if (e.key === ']' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setCritiqueOpen(prev => !prev);
       }
     };
 
@@ -80,156 +292,149 @@ export function CursorClient() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [sidebarOpen, paletteOpen]);
 
+  const saveLabel =
+    saveState === 'saving'
+      ? 'Saving'
+      : saveState === 'saved'
+        ? 'Saved'
+        : (saveError ?? (session?.user ? 'Unsaved' : 'Sign in to keep drafts'));
+
+  const draftText = visiblePostText(tweets.find(tweet => tweet.trim()) ?? '');
+
   return (
-    <main className="relative min-h-[calc(100vh-80px)] w-full">
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-white/10 bg-[#111]/80 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
-          <nav className="flex items-center gap-4" aria-label="Main navigation">
-            <Link
-              href="/"
-              className="flex items-center gap-2 text-sm text-white/60 transition-colors hover:text-white"
-              aria-label="Return to home page"
-            >
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-              <span>Back to Home</span>
+    <div className="flex h-svh flex-col bg-[oklch(0.132_0.016_50)]">
+      <header className="grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-white/8 px-4">
+        <nav className="flex items-center gap-5 text-sm text-white/45">
+          <Link href="/" className="font-heading text-base text-white">
+            PostRoast
+          </Link>
+          <Link href="/roast" className="hover:text-white">
+            Roast
+          </Link>
+          <Link href="/ideas" className="hover:text-white">
+            Ideas
+          </Link>
+        </nav>
+        <p className="font-heading text-sm tracking-tight text-white/80">Studio</p>
+        <div className="flex items-center justify-end gap-3 text-xs text-white/40">
+          <span className={saveState === 'error' ? 'max-w-[14rem] truncate text-[oklch(0.78_0.12_28)]' : undefined}>
+            {saveLabel}
+          </span>
+          {saveCode === 'cap' ? (
+            <Link href="/account" className="text-[oklch(0.72_0.16_28)] hover:text-white">
+              Upgrade
             </Link>
-            <div className="h-4 w-px bg-white/20" aria-hidden="true" />
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-[#1d9bf0]" aria-hidden="true" />
-              <h1 className="text-lg font-semibold text-white">𝕏 Cursor</h1>
-            </div>
-          </nav>
-          <div className="flex items-center gap-3">
-            <div className="hidden text-xs text-white/60 sm:block">
-              Press <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-[10px]">Ctrl/Cmd+K</kbd>{' '}
-              for commands
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setPaletteOpen(true)}
-              className="hidden text-white/60 hover:text-white sm:flex"
-              aria-label="Open command palette"
-            >
-              Commands
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setSidebarOpen(true)}
-              className="flex text-white/60 hover:text-white lg:hidden"
-              aria-label="Open AI assistant sidebar"
-            >
-              <MessageSquare className="h-4 w-4" aria-hidden="true" />
-            </Button>
-          </div>
+          ) : null}
+          <span className="hidden tracking-wide text-white/25 uppercase sm:inline">
+            N · [ · ] · ⌘K
+          </span>
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            className="hidden hover:text-white sm:inline"
+          >
+            ⌘K
+          </button>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="hover:text-white lg:hidden"
+          >
+            Critique
+          </button>
         </div>
       </header>
 
-      {/* Ad Spots between Header and Studio */}
-      <div className="mx-auto w-full max-w-7xl px-3 sm:px-4 lg:px-6">
-        <div className="grid gap-3 py-4 sm:grid-cols-1 md:grid-cols-3">
-          <PostPreviewSpot
-            id="spot-cursor-1"
-            content=""
-            className="rounded-lg border border-white/10"
-            showScores={false}
-          />
-          <PostPreviewSpot
-            id="spot-cursor-2"
-            content=""
-            className="rounded-lg border border-white/10"
-            showScores={false}
-          />
-          <PostPreviewSpot
-            id="spot-cursor-3"
-            content=""
-            className="rounded-lg border border-white/10"
-            showScores={false}
-          />
-        </div>
-      </div>
+      <div className="flex min-h-0 flex-1">
+        {draftsOpen ? (
+          <aside className="hidden w-64 shrink-0 flex-col border-r border-white/8 lg:flex">
+            <StudioDrafts variant="rail" activeId={threadId} onNew={newDraft} onLoad={loadDraft} />
+          </aside>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setDraftsOpen(true)}
+            className="hidden w-10 shrink-0 border-r border-white/8 text-[11px] tracking-[0.2em] text-white/30 uppercase [writing-mode:vertical-rl] hover:text-white lg:flex lg:items-center lg:justify-center"
+          >
+            Drafts
+          </button>
+        )}
 
-      {/* Main Content */}
-      <div className="mx-auto flex min-h-[calc(100vh-80px-57px)] w-full max-w-7xl flex-col gap-4 p-3 sm:p-4 lg:flex-row lg:p-6">
-        {/* Editor Section */}
-        <section
-          className="flex min-h-[calc(100vh-80px-57px-32px)] flex-1 flex-col"
-          aria-label="Thread composer"
-        >
-          <div className="flex-1 rounded-lg border border-white/10 bg-[#0b0b0b] p-3 sm:p-4 lg:p-6">
-            <div className="mx-auto w-full max-w-3xl">
-              <div className="mb-4 hidden sm:block">
-                <h2 className="text-sm font-medium text-white/60">Compose your thread</h2>
-                <p className="mt-1 text-xs text-white/40">
-                  Write, edit, and refine your X posts with AI-powered assistance
-                </p>
-              </div>
-              <ThreadComposer
-                externalInsert={externalInsert}
-                externalThread={externalThread}
-                onInserted={() => {
-                  // Clear after a small delay to avoid triggering effects during render
-                  setTimeout(() => {
-                    setExternalInsert('');
-                    setExternalThread(undefined);
-                  }, 100);
-                }}
-              />
+        <section className="min-w-0 flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-2xl px-4 py-10 sm:px-10">
+            <div className="lg:hidden">
+              <StudioDrafts activeId={threadId} onNew={newDraft} onLoad={loadDraft} />
             </div>
+            <ThreadComposer
+              key={composerKey}
+              externalInsert={externalInsert}
+              externalThread={externalThread}
+              onTweetsChange={setTweets}
+              onComposeOnX={composeOnX}
+              onMarkPosted={session?.user ? togglePosted : undefined}
+              posted={Boolean(postedAt)}
+              onInserted={() => {
+                setTimeout(() => {
+                  setExternalInsert('');
+                  setExternalThread(undefined);
+                }, 100);
+              }}
+            />
           </div>
         </section>
 
-        {/* Desktop Sidebar */}
-        <aside
-          className="hidden w-full shrink-0 lg:block lg:w-[360px]"
-          aria-label="AI Assistant sidebar"
-        >
-          <StudioSidebar
-            onInsert={t => setExternalInsert(t)}
-            onInsertThread={tweets => setExternalThread(tweets)}
-          />
-        </aside>
+        {critiqueOpen ? (
+          <aside className="hidden h-full w-[360px] shrink-0 flex-col overflow-hidden border-l border-white/8 lg:flex">
+            <StudioSidebar
+              onInsert={t => setExternalInsert(t)}
+              onInsertThread={next => setExternalThread(next)}
+              draftText={draftText}
+              roast={roast}
+              scores={scores}
+              desk={desk}
+              goal={goal}
+            />
+          </aside>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setCritiqueOpen(true)}
+            className="hidden w-10 shrink-0 border-l border-white/8 text-[11px] tracking-[0.2em] text-white/30 uppercase [writing-mode:vertical-rl] hover:text-white lg:flex lg:items-center lg:justify-center"
+          >
+            Critique
+          </button>
+        )}
       </div>
 
-      {/* Mobile Sidebar Dialog */}
       <Dialog open={sidebarOpen} onOpenChange={setSidebarOpen}>
-        <DialogContent className="max-h-[90vh] border-white/10 bg-[#0b0b0b] p-0 sm:max-w-lg">
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-            <div>
-              <h2 className="text-base font-semibold text-white">AI Assistant</h2>
-              <p className="mt-0.5 text-xs text-white/50">Press Esc to close</p>
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setSidebarOpen(false)}
-              className="h-8 w-8 p-0"
-              aria-label="Close sidebar"
-              title="Close (Esc)"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
+        <DialogContent className="max-h-[90vh] border-white/10 bg-[oklch(0.14_0.016_50)] p-0 sm:max-w-lg">
+          <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
+            <p className="text-sm text-white/70">Critique</p>
+            <Button size="sm" variant="ghost" onClick={() => setSidebarOpen(false)}>
+              Close
             </Button>
           </div>
-          <div className="flex max-h-[calc(90vh-60px)] flex-col overflow-hidden">
-            <div className="flex-1 overflow-y-auto px-4 pb-4">
-              <StudioSidebar
-                onInsert={t => {
-                  setExternalInsert(t);
-                  setSidebarOpen(false);
-                }}
-                onInsertThread={tweets => {
-                  setExternalThread(tweets);
-                  setSidebarOpen(false);
-                }}
-              />
-            </div>
+          <div className="max-h-[calc(90vh-52px)] overflow-y-auto px-4 pb-4">
+            <StudioSidebar
+              onInsert={t => {
+                setExternalInsert(t);
+                setSidebarOpen(false);
+              }}
+              onInsertThread={nextTweets => {
+                setExternalThread(nextTweets);
+                setSidebarOpen(false);
+              }}
+              draftText={draftText}
+              roast={roast}
+              scores={scores}
+              desk={desk}
+              goal={goal}
+            />
           </div>
         </DialogContent>
       </Dialog>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={actions} />
-    </main>
+    </div>
   );
 }

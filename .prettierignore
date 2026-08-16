@@ -42,4 +42,6 @@ pnpm-lock.yaml
 
 # Generated files
 *.generated.*
-*.min.* 
+*.min.*
+src/generated
+coverage 

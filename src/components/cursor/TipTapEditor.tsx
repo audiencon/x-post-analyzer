@@ -1,29 +1,24 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
-import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
 import { Placeholder } from '@tiptap/extensions';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
+import { isThreadWriteKind, type RewriteKind } from '@/config/prompt';
+import { storedToEditorHtml, textToHtmlWithParagraphs } from '@/lib/editor-helpers';
 import {
-  Bold,
-  Italic,
-  Code,
-  Type,
-  Zap,
-  Target,
-  MessageSquare,
-  Hash,
-  Highlighter,
-  Sparkles,
-  Undo,
-  Redo,
-} from 'lucide-react';
-import { Copy as CopyIcon } from 'lucide-react';
-import { toast } from 'sonner';
-import type { RewriteKind } from '@/config/prompt';
-import { textToHtmlWithParagraphs } from '@/lib/editor-helpers';
+  filterSlashCommands,
+  groupedSlashCommands,
+  orderedSlashCommands,
+  slashCommandsFor,
+  slashMenuHint,
+  slashMenuTitle,
+  type SlashCommand,
+  type SlashContext,
+} from '@/lib/slash-commands';
+import { cn } from '@/lib/utils';
 
 interface TipTapEditorProps {
   value: string;
@@ -35,105 +30,29 @@ interface TipTapEditorProps {
   loadingAction?: string | null;
   onSlashCommand?: (command: string) => void;
   onEditorReady?: (editor: Editor) => void;
-  suppressExternalSync?: boolean; // when true, don't set content from value
+  onAddPost?: () => void;
+  suppressExternalSync?: boolean;
+  slashContext?: SlashContext;
 }
 
-interface SlashCommand {
-  id: string;
-  title: string;
-  description: string;
-  icon: React.ReactNode;
-  category: 'ai' | 'format';
+type SlashState = { query: string; from: number; to: number };
+
+const SELECTION_REWRITES: RewriteKind[] = ['improve', 'hook', 'short', 'punchy'];
+
+function readSlashState(editor: Editor): SlashState | null {
+  const { from } = editor.state.selection;
+  if (from !== editor.state.selection.to) return null;
+  const textBefore = editor.state.doc.textBetween(Math.max(0, from - 48), from, '\n');
+  if (/https?:\/\/\S*$/i.test(textBefore) || textBefore.endsWith('://')) return null;
+  const match = textBefore.match(/\/(\w*)$/);
+  if (!match) return null;
+  const query = match[1];
+  return { query, from: from - query.length - 1, to: from };
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
-  // AI Commands
-  {
-    id: 'improve',
-    title: 'Improve',
-    description: 'Polish clarity and engagement',
-    icon: <Type className="h-4 w-4" />,
-    category: 'ai',
-  },
-  {
-    id: 'extend',
-    title: 'Extend',
-    description: 'Add crisp detail or example',
-    icon: <MessageSquare className="h-4 w-4" />,
-    category: 'ai',
-  },
-  {
-    id: 'short',
-    title: 'Shorten',
-    description: 'Make concise under ~180 chars',
-    icon: <Zap className="h-4 w-4" />,
-    category: 'ai',
-  },
-  {
-    id: 'hook',
-    title: 'Hook',
-    description: 'Rewrite to a stronger hook',
-    icon: <Target className="h-4 w-4" />,
-    category: 'ai',
-  },
-  {
-    id: 'punchy',
-    title: 'Punchy',
-    description: 'Increase energy and punch',
-    icon: <Sparkles className="h-4 w-4" />,
-    category: 'ai',
-  },
-  {
-    id: 'clarify',
-    title: 'Clarify',
-    description: 'Simplify complex wording',
-    icon: <MessageSquare className="h-4 w-4" />,
-    category: 'ai',
-  },
-  {
-    id: 'formal',
-    title: 'Formal',
-    description: 'More formal tone',
-    icon: <Type className="h-4 w-4" />,
-    category: 'ai',
-  },
-  {
-    id: 'casual',
-    title: 'Casual',
-    description: 'More casual, friendly tone',
-    icon: <Hash className="h-4 w-4" />,
-    category: 'ai',
-  },
-  // Format Commands
-  {
-    id: 'bold',
-    title: 'Bold',
-    description: 'Make text bold',
-    icon: <Bold className="h-4 w-4" />,
-    category: 'format',
-  },
-  {
-    id: 'italic',
-    title: 'Italic',
-    description: 'Make text italic',
-    icon: <Italic className="h-4 w-4" />,
-    category: 'format',
-  },
-  {
-    id: 'code',
-    title: 'Code',
-    description: 'Format as code',
-    icon: <Code className="h-4 w-4" />,
-    category: 'format',
-  },
-  {
-    id: 'highlight',
-    title: 'Highlight',
-    description: 'Highlight text',
-    icon: <Highlighter className="h-4 w-4" />,
-    category: 'format',
-  },
-];
+function filterCommands(query: string, context: SlashContext) {
+  return orderedSlashCommands(filterSlashCommands(slashCommandsFor(context), query), context);
+}
 
 export function TipTapEditor({
   value,
@@ -145,11 +64,54 @@ export function TipTapEditor({
   loadingAction,
   onSlashCommand,
   onEditorReady,
+  onAddPost,
   suppressExternalSync,
+  slashContext = { empty: false, thread: false },
 }: TipTapEditorProps) {
   type EditorWithFlag = Editor & { setContentSettingFlag?: (setting: boolean) => void };
   const isSettingContent = useRef(false);
   const lastSyncedValue = useRef<string>(value);
+  const slashRef = useRef<SlashState | null>(null);
+  const indexRef = useRef(0);
+  const editorRef = useRef<Editor | null>(null);
+  const onSlashCommandRef = useRef(onSlashCommand);
+  const onAddPostRef = useRef(onAddPost);
+  const onChangeRef = useRef(onChange);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  const runCommandRef = useRef<(command: SlashCommand) => void>(() => {});
+  const onAiActionRef = useRef(onAiAction);
+  const [slash, setSlash] = useState<SlashState | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; flip: boolean } | null>(
+    null
+  );
+  const [selection, setSelection] = useState<{ from: number; to: number } | null>(null);
+  const [selPos, setSelPos] = useState<{ top: number; left: number; flip: boolean } | null>(null);
+  const [activeMarks, setActiveMarks] = useState({ bold: false, italic: false, highlight: false });
+
+  const slashContextRef = useRef(slashContext);
+  slashContextRef.current = slashContext;
+  onSlashCommandRef.current = onSlashCommand;
+  onAddPostRef.current = onAddPost;
+  onChangeRef.current = onChange;
+  onSelectionChangeRef.current = onSelectionChange;
+  onAiActionRef.current = onAiAction;
+
+  const filtered = useMemo(
+    () => filterCommands(slash?.query ?? '', slashContext),
+    [slash?.query, slashContext.empty, slashContext.thread]
+  );
+
+  const syncSlash = (instance: Editor) => {
+    const next = readSlashState(instance);
+    slashRef.current = next;
+    setSlash(next);
+    if (!next) {
+      indexRef.current = 0;
+      setSlashIndex(0);
+    }
+  };
+
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -162,47 +124,148 @@ export function TipTapEditor({
     ],
     content: value,
     immediatelyRender: false,
-    onSelectionUpdate: ({ editor }) => {
-      if (!onSelectionChange) return;
-      const { from, to } = editor.state.selection;
-      onSelectionChange(from, to);
+    onSelectionUpdate: ({ editor: instance }) => {
+      syncSlash(instance);
+      const { from, to } = instance.state.selection;
+      setSelection(from !== to ? { from, to } : null);
+      setActiveMarks({
+        bold: instance.isActive('bold'),
+        italic: instance.isActive('italic'),
+        highlight: instance.isActive('highlight'),
+      });
+      onSelectionChangeRef.current?.(from, to);
     },
-    onUpdate: ({ editor }) => {
-      // Only update if we're not in the middle of setting content
+    onUpdate: ({ editor: instance }) => {
+      syncSlash(instance);
       if (!isSettingContent.current) {
-        const newText = editor.getText();
-        // Only call onChange if the text actually changed
-        if (newText !== lastSyncedValue.current) {
-          lastSyncedValue.current = newText;
-          onChange(newText);
+        const next = instance.getHTML();
+        if (next !== lastSyncedValue.current) {
+          lastSyncedValue.current = next;
+          onChangeRef.current(next);
         }
       }
     },
     editorProps: {
       attributes: {
-        class: `${className ?? ''} outline-none prose prose-invert max-w-none`,
+        class: `${className ?? ''} outline-none max-w-none`,
         'data-placeholder': placeholder ?? '',
+      },
+      handleKeyDown: (_view, event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+          event.preventDefault();
+          onAddPostRef.current?.();
+          return true;
+        }
+
+        const open = slashRef.current;
+        if (!open) return false;
+
+        const items = filterCommands(open.query, slashContextRef.current);
+        if (items.length === 0) return false;
+
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          const next = (indexRef.current + 1) % items.length;
+          indexRef.current = next;
+          setSlashIndex(next);
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          const next = (indexRef.current - 1 + items.length) % items.length;
+          indexRef.current = next;
+          setSlashIndex(next);
+          return true;
+        }
+
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          event.preventDefault();
+          const command = items[indexRef.current] ?? items[0];
+          if (command) runCommandRef.current(command);
+          return true;
+        }
+
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          slashRef.current = null;
+          setSlash(null);
+          return true;
+        }
+
+        return false;
       },
     },
   });
 
+  editorRef.current = editor;
+
+  const runCommand = (command: SlashCommand) => {
+    const instance = editorRef.current;
+    if (!instance) return;
+    const open = slashRef.current ?? readSlashState(instance);
+    if (open) {
+      instance.chain().focus().deleteRange({ from: open.from, to: open.to }).run();
+    }
+    slashRef.current = null;
+    setSlash(null);
+    indexRef.current = 0;
+    setSlashIndex(0);
+
+    switch (command.category) {
+      case 'ai':
+      case 'thread':
+        onSlashCommandRef.current?.(command.id);
+        return;
+      case 'insert':
+        instance.chain().focus().insertContent(textToHtmlWithParagraphs(command.insert)).run();
+        return;
+      case 'action':
+        onAddPostRef.current?.();
+        return;
+      case 'format':
+        switch (command.id) {
+          case 'bold':
+            instance.chain().focus().toggleBold().run();
+            return;
+          case 'italic':
+            instance.chain().focus().toggleItalic().run();
+            return;
+          case 'highlight':
+            instance.chain().focus().toggleHighlight().run();
+            return;
+          default: {
+            const _exhaustive: never = command;
+            return _exhaustive;
+          }
+        }
+        return;
+      default: {
+        const _exhaustive: never = command;
+        void _exhaustive;
+      }
+    }
+  };
+
+  runCommandRef.current = runCommand;
+
   useEffect(() => {
     if (!editor) return;
-    if (suppressExternalSync) return; // don't override while streaming
-    if (isSettingContent.current) return; // don't sync if we're setting content internally
+    if (suppressExternalSync) return;
+    if (isSettingContent.current) return;
 
-    // Normalize for comparison (ignore whitespace differences)
     const normalize = (t: string) => t.replace(/\s+/g, ' ').trim();
     const current = normalize(editor.getText());
-    const next = normalize(value.replace(/\n/g, ' '));
+    const incoming = storedToEditorHtml(value);
+    const incomingPlain = normalize(value.replace(/<[^>]+>/g, ' ').replace(/\n/g, ' '));
 
-    // Only sync if the value actually changed from an external source
-    // (not from our own onChange callback)
-    if (current === next || value === lastSyncedValue.current) {
+    const { from, to } = editor.state.selection;
+    if (from !== to) return;
+
+    if (current === incomingPlain || value === lastSyncedValue.current) {
       return;
     }
 
-    // Set the flag to prevent onChange from triggering
     isSettingContent.current = true;
     lastSyncedValue.current = value;
 
@@ -212,315 +275,268 @@ export function TipTapEditor({
       return;
     }
 
-    const html = textToHtmlWithParagraphs(value);
-
-    // Use setContent with emitUpdate: false to prevent onChange
-    // Note: setContent will clear history, but this is only for external updates
-    editor.commands.setContent(html, { emitUpdate: false });
-
-    // Reset flag after a small delay to allow the content to be set
+    editor.commands.setContent(incoming, { emitUpdate: false });
     setTimeout(() => {
       isSettingContent.current = false;
     }, 0);
   }, [value, editor, suppressExternalSync]);
 
   useEffect(() => {
-    if (editor) {
-      // Add a method to set the content setting flag
-      (editor as EditorWithFlag).setContentSettingFlag = (setting: boolean) => {
-        isSettingContent.current = setting;
-      };
-
-      if (onEditorReady) {
-        onEditorReady(editor);
-      }
-    }
+    if (!editor) return;
+    (editor as EditorWithFlag).setContentSettingFlag = (setting: boolean) => {
+      isSettingContent.current = setting;
+    };
+    onEditorReady?.(editor);
   }, [editor, onEditorReady]);
 
-  const executeCommand = (command: SlashCommand) => {
-    if (!editor) return;
+  useEffect(() => {
+    if (!slash || slashIndex < filtered.length) return;
+    indexRef.current = 0;
+    setSlashIndex(0);
+  }, [filtered.length, slash, slashIndex]);
 
-    const { from } = editor.state.selection;
-    const textBefore = editor.state.doc.textBetween(0, from, '\n');
-    const slashMatch = textBefore.match(/\/(\w*)$/);
-
-    if (slashMatch) {
-      // Replace the slash command with the result
-      const slashIndex = textBefore.lastIndexOf('/');
-      editor
-        .chain()
-        .focus()
-        .deleteRange({ from: from - (textBefore.length - slashIndex), to: from })
-        .run();
+  useEffect(() => {
+    if (!editor || !slash) {
+      setMenuPos(null);
+      return;
     }
 
-    if (command.category === 'ai' && onSlashCommand) {
-      onSlashCommand(command.id);
-    } else if (command.category === 'format') {
-      // Execute formatting commands
-      switch (command.id) {
-        case 'bold':
-          editor.chain().focus().toggleBold().run();
-          break;
-        case 'italic':
-          editor.chain().focus().toggleItalic().run();
-          break;
-        case 'code':
-          editor.chain().focus().toggleCode().run();
-          break;
-        case 'highlight':
-          editor.chain().focus().toggleHighlight().run();
-          break;
+    const place = () => {
+      try {
+        const coords = editor.view.coordsAtPos(slash.to);
+        const width = 320;
+        const height = Math.min(360, 48 + filtered.length * 52);
+        const left = Math.min(Math.max(12, coords.left), window.innerWidth - width - 12);
+        const flip = coords.bottom + 8 + height > window.innerHeight;
+        const top = flip ? coords.top - 8 : coords.bottom + 8;
+        setMenuPos({ top, left, flip });
+      } catch {
+        setMenuPos(null);
       }
+    };
+
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [editor, slash, filtered.length]);
+
+  useEffect(() => {
+    if (!editor || !selection || slash) {
+      setSelPos(null);
+      return;
     }
-  };
+
+    const place = () => {
+      try {
+        const start = editor.view.coordsAtPos(selection.from);
+        const end = editor.view.coordsAtPos(selection.to);
+        const width = 420;
+        const left = Math.min(
+          Math.max(12, (start.left + end.left) / 2 - width / 2),
+          window.innerWidth - width - 12
+        );
+        const flip = start.top - 52 < 12;
+        const top = flip ? end.bottom + 8 : start.top - 8;
+        setSelPos({ top, left, flip });
+      } catch {
+        setSelPos(null);
+      }
+    };
+
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [editor, selection, slash]);
 
   if (!editor) return null;
 
-  // loading overlay controlled by loadingAction
+  const formatSelection = (mark: 'bold' | 'italic' | 'highlight') => {
+    const chain = editor.chain().focus();
+    switch (mark) {
+      case 'bold':
+        chain.toggleBold().run();
+        break;
+      case 'italic':
+        chain.toggleItalic().run();
+        break;
+      case 'highlight':
+        chain.toggleHighlight().run();
+        break;
+      default: {
+        const _exhaustive: never = mark;
+        void _exhaustive;
+      }
+    }
+    setActiveMarks({
+      bold: editor.isActive('bold'),
+      italic: editor.isActive('italic'),
+      highlight: editor.isActive('highlight'),
+    });
+  };
 
   return (
     <>
-      {/* Always visible toolbar with undo/redo and formatting */}
-      <div className="mb-2 flex items-center justify-between gap-1 rounded-lg border border-[#333] bg-[#0a0a0a] p-2">
-        <div className="flex items-center gap-1">
-          <button
-            className="flex h-8 w-8 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
-            onClick={() => editor.chain().focus().undo().run()}
-            disabled={!editor.can().chain().focus().undo().run()}
-            title="Undo (Ctrl+Z)"
-          >
-            <Undo className="h-4 w-4" />
-          </button>
-          <button
-            className="flex h-8 w-8 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
-            onClick={() => editor.chain().focus().redo().run()}
-            disabled={!editor.can().chain().focus().redo().run()}
-            title="Redo (Ctrl+Y)"
-          >
-            <Redo className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            className="flex h-8 items-center gap-1 rounded px-2 text-xs hover:bg-white/10"
-            onClick={() => {
-              const text = editor.getText();
-              if (!text.trim()) return;
-              navigator.clipboard
-                .writeText(text)
-                .then(() => toast.success('Copied tweet to clipboard', { duration: 2000 }))
-                .catch(() =>
-                  toast.error('Failed to copy', {
-                    description: 'Please try again.',
-                    duration: 2000,
-                  })
-                );
-            }}
-            title="Copy tweet"
-          >
-            <CopyIcon className="h-4 w-4" />
-            <span>Copy</span>
-          </button>
-        </div>
-      </div>
-      <BubbleMenu
-        editor={editor}
-        options={{
-          placement: 'bottom',
-        }}
-        shouldShow={({ from, to }) => {
-          // Show when text is selected and we have AI actions
-          return from !== to;
-        }}
-      >
-        <div className="flex items-center gap-1 rounded-lg border border-[#333] bg-[#0a0a0a] p-2 shadow-lg backdrop-blur-sm">
-          <div className="flex items-center gap-1">
-            <button
-              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-              onClick={() => onAiAction?.('improve')}
-              disabled={loadingAction === 'improve'}
-              title="Improve clarity and engagement"
+      {selection && selPos && !slash
+        ? createPortal(
+            <div
+              className="fixed z-50 flex select-none items-center gap-1 border border-white/10 bg-[oklch(0.16_0.014_50)] px-2 py-1.5 shadow-[0_18px_40px_oklch(0.1_0.02_50_/_0.5)]"
+              onMouseDown={event => event.preventDefault()}
+              style={{
+                top: selPos.flip ? selPos.top : undefined,
+                bottom: selPos.flip ? undefined : window.innerHeight - selPos.top,
+                left: selPos.left,
+              }}
             >
-              {loadingAction === 'improve' && (
-                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-              )}
-              <Type className="h-3 w-3" />
-              <span className="relative">Improve</span>
-            </button>
-            <button
-              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-              onClick={() => onAiAction?.('extend')}
-              disabled={loadingAction === 'extend'}
-              title="Add details and examples"
-            >
-              {loadingAction === 'extend' && (
-                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-              )}
-              <MessageSquare className="h-3 w-3" />
-              <span className="relative">Extend</span>
-            </button>
-            <button
-              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-              onClick={() => onAiAction?.('short')}
-              disabled={loadingAction === 'short'}
-              title="Make concise and punchy"
-            >
-              {loadingAction === 'short' && (
-                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-              )}
-              <Zap className="h-3 w-3" />
-              <span className="relative">Short</span>
-            </button>
-            <button
-              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-              onClick={() => onAiAction?.('hook')}
-              disabled={loadingAction === 'hook'}
-              title="Create a strong hook"
-            >
-              {loadingAction === 'hook' && (
-                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-              )}
-              <Target className="h-3 w-3" />
-              <span className="relative">Hook</span>
-            </button>
-            <button
-              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-              onClick={() => onAiAction?.('punchy')}
-              disabled={loadingAction === 'punchy'}
-              title="Increase energy and punch"
-            >
-              {loadingAction === 'punchy' && (
-                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-              )}
-              <Zap className="h-3 w-3" />
-              <span className="relative">Punchy</span>
-            </button>
-            <button
-              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-              onClick={() => onAiAction?.('clarify')}
-              disabled={loadingAction === 'clarify'}
-              title="Simplify and clarify"
-            >
-              {loadingAction === 'clarify' && (
-                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-              )}
-              <MessageSquare className="h-3 w-3" />
-              <span className="relative">Clarify</span>
-            </button>
-            <button
-              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-              onClick={() => onAiAction?.('formal')}
-              disabled={loadingAction === 'formal'}
-              title="Make more formal"
-            >
-              {loadingAction === 'formal' && (
-                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-              )}
-              <Type className="h-3 w-3" />
-              <span className="relative">Formal</span>
-            </button>
-            <button
-              className="relative flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50"
-              onClick={() => onAiAction?.('casual')}
-              disabled={loadingAction === 'casual'}
-              title="Make more casual"
-            >
-              {loadingAction === 'casual' && (
-                <div className="absolute inset-0 animate-pulse rounded bg-white/10" />
-              )}
-              <Hash className="h-3 w-3" />
-              <span className="relative">Casual</span>
-            </button>
-          </div>
-        </div>
-      </BubbleMenu>
-
-      {/* Slash Command Floating Menu */}
-      <FloatingMenu
-        editor={editor}
-        options={{
-          placement: 'bottom-start',
-        }}
-        shouldShow={({ editor }) => {
-          const { from } = editor.state.selection;
-          const textBefore = editor.state.doc.textBetween(0, from, '\n');
-          const slashMatch = textBefore.match(/\/(\w*)$/);
-
-          if (!slashMatch) return false;
-
-          const query = slashMatch[1].toLowerCase();
-          const availableCommands = SLASH_COMMANDS.filter(
-            command => command.id.includes(query) || command.title.toLowerCase().includes(query)
-          );
-
-          return availableCommands.length > 0;
-        }}
-      >
-        <div className="w-80 rounded-lg border border-[#333] bg-[#0a0a0a] p-2 shadow-lg backdrop-blur-sm">
-          <div className="mb-2 text-xs font-medium text-white/70">Commands</div>
-          <div className="max-h-64 space-y-1 overflow-y-auto">
-            {(() => {
-              if (!editor) return [];
-              const { from } = editor.state.selection;
-              const textBefore = editor.state.doc.textBetween(0, from, '\n');
-              const slashMatch = textBefore.match(/\/(\w*)$/);
-              if (!slashMatch) return [];
-
-              const query = slashMatch[1].toLowerCase();
-              return SLASH_COMMANDS.filter(
-                command => command.id.includes(query) || command.title.toLowerCase().includes(query)
-              );
-            })().map(command => (
               <button
-                key={command.id}
-                className="flex w-full items-center gap-3 rounded px-3 py-2 text-left hover:bg-white/10"
-                onClick={() => executeCommand(command)}
+                type="button"
+                onMouseDown={event => {
+                  event.preventDefault();
+                  formatSelection('bold');
+                }}
+                className={cn(
+                  'min-w-7 px-1.5 text-sm font-semibold',
+                  activeMarks.bold ? 'text-white' : 'text-white/40 hover:text-white'
+                )}
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded bg-white/10 text-white/70">
-                  {command.icon}
-                </div>
-                <div className="flex-1">
-                  <div className="text-sm font-medium text-white">{command.title}</div>
-                  <div className="text-xs text-white/60">{command.description}</div>
-                </div>
-                <div className="text-xs text-white/40">/{command.id}</div>
+                B
               </button>
-            ))}
-            {(() => {
-              if (!editor) return null;
-              const { from } = editor.state.selection;
-              const textBefore = editor.state.doc.textBetween(0, from, '\n');
-              const slashMatch = textBefore.match(/\/(\w*)$/);
-              if (!slashMatch) return null;
+              <button
+                type="button"
+                onMouseDown={event => {
+                  event.preventDefault();
+                  formatSelection('italic');
+                }}
+                className={cn(
+                  'min-w-7 px-1.5 text-sm italic',
+                  activeMarks.italic ? 'text-white' : 'text-white/40 hover:text-white'
+                )}
+              >
+                I
+              </button>
+              <button
+                type="button"
+                onMouseDown={event => {
+                  event.preventDefault();
+                  formatSelection('highlight');
+                }}
+                className={cn(
+                  'min-w-7 px-1.5 text-xs tracking-wide',
+                  activeMarks.highlight
+                    ? 'text-[oklch(0.78_0.14_28)]'
+                    : 'text-white/40 hover:text-white'
+                )}
+              >
+                Mark
+              </button>
+              <span className="mx-1 h-4 w-px bg-white/10" />
+              {SELECTION_REWRITES.map(kind => (
+                <button
+                  key={kind}
+                  type="button"
+                  disabled={loadingAction === kind}
+                  onMouseDown={event => {
+                    event.preventDefault();
+                    onAiActionRef.current?.(kind);
+                  }}
+                  className={cn(
+                    'px-1.5 text-xs',
+                    kind === 'improve'
+                      ? 'text-[oklch(0.72_0.16_28)] hover:text-[oklch(0.8_0.16_28)]'
+                      : 'text-white/45 hover:text-white',
+                    loadingAction === kind && 'opacity-40'
+                  )}
+                >
+                  {loadingAction === kind ? '…' : kind[0].toUpperCase() + kind.slice(1)}
+                </button>
+              ))}
+            </div>,
+            document.body
+          )
+        : null}
 
-              const query = slashMatch[1].toLowerCase();
-              const availableCommands = SLASH_COMMANDS.filter(
-                command => command.id.includes(query) || command.title.toLowerCase().includes(query)
-              );
-
-              return availableCommands.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-white/50">No commands found</div>
-              ) : null;
-            })()}
-          </div>
-        </div>
-      </FloatingMenu>
+      {slash && menuPos && filtered.length > 0
+        ? createPortal(
+            <div
+              className="fixed z-50 w-96 border border-white/10 bg-[oklch(0.16_0.014_50)] py-1 shadow-[0_24px_48px_oklch(0.1_0.02_50_/_0.55)]"
+              style={{
+                top: menuPos.flip ? undefined : menuPos.top,
+                bottom: menuPos.flip ? window.innerHeight - menuPos.top : undefined,
+                left: menuPos.left,
+              }}
+            >
+              <div className="px-3 py-2.5">
+                <p className="text-[11px] tracking-[0.16em] text-white/30 uppercase">
+                  {slashMenuTitle(slashContext, slash.query)}
+                </p>
+                {slashMenuHint(slashContext, slash.query) ? (
+                  <p className="mt-1 text-xs leading-5 text-white/40">
+                    {slashMenuHint(slashContext, slash.query)}
+                  </p>
+                ) : null}
+              </div>
+              <div className="max-h-80 overflow-y-auto">
+                {groupedSlashCommands(filtered, slashContext).map(section => {
+                  const offset = filtered.findIndex(command => command === section.items[0]);
+                  return (
+                    <div key={section.group}>
+                      <p className="px-3 pt-2 pb-1 text-[10px] tracking-[0.14em] text-white/25 uppercase">
+                        {section.label}
+                      </p>
+                      {section.items.map((command, itemIndex) => {
+                        const index = offset + itemIndex;
+                        return (
+                          <button
+                            key={`${section.group}-${command.id}`}
+                            type="button"
+                            onMouseEnter={() => {
+                              indexRef.current = index;
+                              setSlashIndex(index);
+                            }}
+                            onMouseDown={event => {
+                              event.preventDefault();
+                              runCommand(command);
+                            }}
+                            className={cn(
+                              'flex w-full px-3 py-2.5 text-left',
+                              index === slashIndex ? 'bg-white/7 text-white' : 'text-white/70'
+                            )}
+                          >
+                            <span>
+                              <span className="block text-sm">{command.title}</span>
+                              <span className="text-xs leading-5 text-white/40">
+                                {command.description}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
 
       <div className="relative">
         <EditorContent
           editor={editor}
-          disabled={!!loadingAction}
-          className={loadingAction ? 'opacity-50' : ''}
+          className={loadingAction ? 'pointer-events-none opacity-50' : ''}
         />
-        {loadingAction && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-sm">
-            <div className="flex items-center gap-2 rounded-lg bg-[#0a0a0a] px-3 py-2 text-sm text-white">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white"></div>
-              <span>AI is {loadingAction}ing...</span>
-            </div>
-          </div>
-        )}
+        {loadingAction ? (
+          <p className="absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-sm text-white/45">
+            {isThreadWriteKind(loadingAction) ? 'Writing…' : 'Rewriting…'}
+          </p>
+        ) : null}
       </div>
     </>
   );

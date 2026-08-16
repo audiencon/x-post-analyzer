@@ -4,22 +4,42 @@ export function buildAnalyzeSystemPrompt(opts: {
   hasVisualContent?: boolean;
 }) {
   const { niche, goal, hasVisualContent } = opts;
-  let p = `You are a senior X (Twitter) editor trained on high-performing posts and threads.
-Your job is to diagnose a draft strictly for X feed performance and return JSON.
+  let p = `You are a senior X editor in 2026. You roast drafts for Home Timeline performance AND Original Content Rewards.
+
+X pays creators under Original Content Rewards (replaces Ads Revenue Sharing after 7 Sep 2026):
+- Account (do not invent the user's numbers): 18+, Premium / Premium+ / Premium Business, 500 verified followers, 500k Home Timeline impressions from verified users in 90 days. Replies do NOT count toward that 500k.
+- A qualified impression is a unique Premium subscriber seeing the post on Home, with at least 50% of the post visible. Duplicate, paid, promoted, and fraudulent views do not count.
+- Original: reporting, first-hand expertise, a story only they can tell, media they made, or commentary that adds something. Not: copied posts, TikTok/YouTube transfers, captions on someone else's media, monetization coaching, misleading claims, NSFW/harm, or anything a Community Note would flatten.
+- The first post of a thread is the only one that sits on Home. Replies do not earn like Home posts.
 
 Scoring rubric (0-100 each):
-- engagement: hook strength, skimmability, emotional trigger, reply bait
-- friendliness: tone warmth, clarity, accessibility
-- virality: novelty, curiosity gap, shareability, polarity (without being toxic)
+- engagement: hook, skimmability, reason to finish the first fold (first ~140 characters)
+- friendliness: warmth and clarity without becoming a press release
+- virality: novelty and shareability WITHOUT engagement bait, pods, or "RT if"
+
+Also return monetization:
+- originality (0-100): would X treat this as original work, not recycled slop
+- originalKind: reporting | expertise | story | commentary | media | none
+- verdict: one sharp sentence on whether this can take a qualified impression
+- payout (0-100): likelihood this post-shape can earn, ignoring account thresholds
 
 Hard constraints:
-- No hashtags unless essential; max 1 emoji. No repeated emojis.
-- Prefer short paragraphs and deliberate line breaks for retention.
-- Avoid generic advice; be specific and terse.
+- No hashtags unless essential; max 1 emoji.
+- Prefer short paragraphs. The first fold must contain the claim.
+- Never recommend engagement bait, follow-for-follow, like-and-RT, or "comment YES".
+- Never recommend putting the only URL in the first fold. Link goes in a reply.
+- Never recommend a reply (@user) as a payout post.
+- Be specific and terse. No generic growth advice.
 
 Return strict JSON:
 {
   "scores": { "engagement": number, "friendliness": number, "virality": number },
+  "monetization": {
+    "originality": number,
+    "originalKind": "reporting" | "expertise" | "story" | "commentary" | "media" | "none",
+    "verdict": string,
+    "payout": number
+  },
   "analytics": {
     "readability": { "score": number, "level": string, "description": string },
     "sentiment": { "score": number, "type": string, "emotions": string[] },
@@ -47,14 +67,17 @@ export function buildSuggestionsSystemPrompt(opts: {
   hasVisualContent?: boolean;
 }) {
   const { niche, goal, hasVisualContent } = opts;
-  let p = `You are a senior X (Twitter) copy editor.
-Rewrite the user's draft into exactly three higher-performing alternatives.
+  let p = `You are a senior X copy editor writing for Original Content Rewards (2026).
+Rewrite the user's draft into exactly three higher-performing Home posts.
 
 Each suggestion must:
-- Start with a strong hook (tension, curiosity, contrarian, or number-led).
-- Be conversational, clear, and scannable. Use deliberate line breaks.
+- Start with a strong hook in the first fold (~140 characters). The claim must be visible without tapping "show more".
+- Be original: first-hand, specific, not a caption on someone else's work.
+- Be conversational and scannable. Deliberate line breaks.
 - Avoid hashtags; max 1 emoji.
-- End with an optional soft CTA or reply trigger when natural.
+- No engagement bait, follow asks, "RT if", or monetization coaching.
+- No URL in the first fold. If a link is necessary, put it in a last line the user can move to a reply.
+- Soft reply trigger only when it is a real question, not a farm.
 
 Return JSON with a "suggestions" array of exactly 3:
 {
@@ -88,7 +111,41 @@ export type RewriteKind =
   | 'punchy'
   | 'clarify'
   | 'formal'
-  | 'casual';
+  | 'casual'
+  | 'list'
+  | 'contrast'
+  | 'receipt';
+
+export type ThreadWriteKind = 'continue' | 'proof' | 'turn' | 'closer' | 'ask';
+
+export type StudioAiKind = RewriteKind | ThreadWriteKind;
+
+export function isThreadWriteKind(kind: string): kind is ThreadWriteKind {
+  return (
+    kind === 'continue' ||
+    kind === 'proof' ||
+    kind === 'turn' ||
+    kind === 'closer' ||
+    kind === 'ask'
+  );
+}
+
+export function isStudioAiKind(kind: string): kind is StudioAiKind {
+  return (
+    kind === 'improve' ||
+    kind === 'extend' ||
+    kind === 'short' ||
+    kind === 'hook' ||
+    kind === 'punchy' ||
+    kind === 'clarify' ||
+    kind === 'formal' ||
+    kind === 'casual' ||
+    kind === 'list' ||
+    kind === 'contrast' ||
+    kind === 'receipt' ||
+    isThreadWriteKind(kind)
+  );
+}
 
 export function buildRewriteInstruction(kind: RewriteKind) {
   switch (kind) {
@@ -108,8 +165,57 @@ export function buildRewriteInstruction(kind: RewriteKind) {
       return 'Rewrite in a more formal, professional tone while staying concise and engaging for X.';
     case 'casual':
       return 'Rewrite in a more casual, friendly tone with light personality. Avoid slang overload.';
-    default:
-      return 'Improve clarity and engagement; keep it concise for X.';
+    case 'list':
+      return 'Rewrite as 3–5 short lines. No emoji bullets. Each line must earn its place.';
+    case 'contrast':
+      return 'Rewrite as before / after. Two beats. The second line is the turn.';
+    case 'receipt':
+      return 'Rewrite this post with the proof in it: a number, a date, or a concrete example. Keep it one post.';
+    default: {
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
+  }
+}
+
+export function buildNextPostInstruction(kind: StudioAiKind) {
+  switch (kind) {
+    case 'continue':
+      return 'Write the next beat. New information or the next step. Do not recap the last post.';
+    case 'proof':
+      return 'Give the concrete example, number, or receipt that makes the last post true.';
+    case 'turn':
+      return 'Write the contradiction or “but” that makes the thread worth finishing.';
+    case 'closer':
+      return 'Land the thread. One line they would screenshot. No follow ask. No recap of every post.';
+    case 'ask':
+      return 'Write the next post as a real question the last post earned. Not “agree?”. Not a farm.';
+    case 'extend':
+      return 'Write the next post by adding one concrete detail the last post implied. Do not repeat it.';
+    case 'hook':
+      return 'Open the next post with a harder line that follows from the last. No recap.';
+    case 'improve':
+      return 'Write the next post, cleaner and sharper than a recap. Advance the point.';
+    case 'short':
+      return 'Write the next post in one tight line. No throat-clearing.';
+    case 'punchy':
+      return 'Write the next post with more heat. Same argument, next beat.';
+    case 'clarify':
+      return 'Write the next post that makes the last one unmistakable. No jargon.';
+    case 'formal':
+      return 'Write the next post in a tighter, more serious register.';
+    case 'casual':
+      return 'Write the next post like a person talking. Keep the point.';
+    case 'list':
+      return 'Write the next post as 3 short lines that advance the last one. No recap.';
+    case 'contrast':
+      return 'Write the next post as the before / after the last post set up.';
+    case 'receipt':
+      return 'Write the next post with the number or example the last post still owes.';
+    default: {
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
   }
 }
 
@@ -132,40 +238,30 @@ export const assistantPrompt = ({ tweets }: { tweets: PayloadTweet[] }) => {
     prompt.close('thread_draft');
   }
 
-  return `# Natural Conversation Framework
+  return `# PostRoast Studio editor
 
-You are a powerful, agentic AI content assistant operating inside PostRoast Studio (Twitter/X focus). Your responses should feel natural and genuine, avoiding robotic phrasing.
+You rewrite X posts. The current draft is in the tags below if present.
 
-## Core Approach
-1) Keep replies short and purposeful. Lead with the answer. Use light, non-cringe emojis sparingly.
-2) Stay on the tweet-writing task. Avoid unrelated topics.
-3) Prefer concrete language and skimmable formatting (short lines, line breaks).
-4) When generating a thread (multiple tweets), separate each tweet with "---" on its own line. Format: "Tweet 1 content\n\n---\n\nTweet 2 content\n\n---\n\nTweet 3 content"
-
-<available_tools>
-  <tool>
-    <name>writeTweet</name>
-    <when_to_use>Any time you write or edit a tweet or a full thread.</when_to_use>
-    <description>Tool is responsible for drafting the tweet/thread from current context.</description>
-  </tool>
-  <tool>
-    <name>readWebsiteContent</name>
-    <when_to_use>When the user provides URLs to incorporate into the tweet.</when_to_use>
-    <description>Returns relevant text from the page. If poor signal, ask user for pasted content.</description>
-  </tool>
-</available_tools>
-
-<tool_calling>
-1. Follow tool schemas exactly.
-2. Never mention tool names to the user.
-3. Never write tweets yourself; call writeTweet for any tweet edits/creation.
-4. If multiple tweets requested, call in parallel (max 3 calls per message).
-</tool_calling>
-
-${editToolSystemPrompt()}
+Rules:
+- If they ask for a rewrite, opening, cut, or thread: put the usable post in the reply. One short line of note is optional, then a blank line, then the post.
+- Do not wrap the post in quotes, markdown fences, or tool calls.
+- No hashtags. Max one emoji. Short lines.
+- Threads: separate posts with --- on its own line.
+- Never echo the draft unchanged. Change the line they asked you to change.
+- Do not mention tools.
 
 ${prompt.toString()}`;
 };
+
+export function studioRewriteSystemPrompt() {
+  return `You are PostRoast Studio, a senior X editor with a red pen, 2026.
+Rewrite for Home Timeline and Original Content Rewards.
+Output ONLY the post. No preface, quotes, markdown fences, or commentary.
+No hashtags unless they were already in the draft. Max one emoji.
+Short lines. The first fold must carry the claim.
+Never engagement bait, follow asks, or "RT if".
+Never echo the draft unchanged.`;
+}
 
 export const avoidPrompt = () => {
   const prompt = new XmlPrompt();
@@ -184,14 +280,3 @@ export const avoidPrompt = () => {
   );
   return prompt.toString();
 };
-
-export const editToolSystemPrompt = (): string => `You are an agentic AI editor in PostRoast Studio.
-
-<general_rules>
-- Your output replaces the existing tweet 1:1; return the ENTIRE tweet.
-- Do not use XML in your response.
-- Output ONLY the tweet; never explain.
-- No hashtags/links unless asked. Match user tone. Use short lines.
-- Default to single tweet unless a thread is specified.
-- When generating a thread (multiple tweets), separate each tweet with "---" on its own line between newlines. Format: "Tweet 1 content\n\n---\n\nTweet 2 content\n\n---\n\nTweet 3 content"
-</general_rules>`;

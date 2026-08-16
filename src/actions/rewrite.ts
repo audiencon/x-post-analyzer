@@ -2,10 +2,10 @@
 'use server';
 
 import OpenAI from 'openai';
-import Cookies from 'js-cookie';
+import { cookies } from 'next/headers';
 import { DEFAULT_MODEL } from '@/config/openai';
 import creatorsData from '@/data/creators.json';
-import { MAX_REQUESTS, WINDOW_MS } from '@/config/constants';
+import { assertCanUse, recordUsage } from '@/lib/usage';
 
 interface Tweet {
   text: string;
@@ -32,45 +32,24 @@ export interface RewrittenPost {
   };
 }
 
-export async function rewritePost(
-  content: string,
-  username: string,
-  userApiKey?: string
-): Promise<RewrittenPost> {
-  const globalAny = global as any;
-  if (!globalAny.__rewrite_usage__) {
-    globalAny.__rewrite_usage__ = { count: 0, windowStart: Date.now() } as {
-      count: number;
-      windowStart: number;
-    };
-  }
-  const usage = globalAny.__rewrite_usage__ as { count: number; windowStart: number };
-  const now = Date.now();
-  if (now - usage.windowStart > WINDOW_MS) {
-    usage.count = 0;
-    usage.windowStart = now;
-  }
-  if (usage.count >= MAX_REQUESTS) {
-    throw new Error(`Usage limit reached (${MAX_REQUESTS} requests per hour)`);
-  }
-  usage.count += 1;
-  const apiKey = userApiKey || process.env.OPENAI_API_KEY;
+export async function rewritePost(content: string, username: string): Promise<RewrittenPost> {
+  await assertCanUse('rewrite');
+  await recordUsage('rewrite');
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error(
-      'OpenAI API key is required. Please provide your API key or set OPENAI_API_KEY environment variable.'
-    );
+    throw new Error('Rewrite is down. Try again in a minute.');
   }
 
   try {
-    // Get creator data from the local creators array
     const creator = creatorsData.creators.find(c => c.handle.replace('@', '') === username);
     if (!creator) {
       throw new Error(`Creator ${username} not found`);
     }
 
+    const cookieStore = await cookies();
     const recentTweets = creator.recentTweets.slice(0, 5);
     const openai = new OpenAI({ apiKey });
-    const model = Cookies.get('openai-model') || DEFAULT_MODEL;
+    const model = cookieStore.get('openai-model')?.value || DEFAULT_MODEL;
 
     // Analyze the user's writing style
     const styleAnalysis = await openai.chat.completions.create({

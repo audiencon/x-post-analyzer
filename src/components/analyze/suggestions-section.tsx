@@ -1,10 +1,9 @@
 'use client';
 
-import { motion, AnimatePresence } from 'framer-motion';
-import { SuggestionsSkeleton } from '@/components/analysis-skeleton';
 import { SuggestionsGrid } from './suggestions-grid';
 import type { Suggestion } from '@/actions/suggestions';
 import type { AdvancedAnalytics } from '@/actions/analyze';
+import type { StudioDraft } from '@/lib/studio-draft';
 
 interface SuggestionsSectionProps {
   isGettingSuggestions: boolean;
@@ -23,6 +22,7 @@ interface SuggestionsSectionProps {
   }) => void;
   isAnalyzing: boolean;
   currentAnalyzing: string | null;
+  studioContext?: Omit<StudioDraft, 'tweets'>;
 }
 
 export function SuggestionsSection({
@@ -34,46 +34,30 @@ export function SuggestionsSection({
   handleSimulateABTest,
   isAnalyzing,
   currentAnalyzing,
+  studioContext,
 }: SuggestionsSectionProps) {
-  return (
-    <AnimatePresence mode="wait">
-      {isGettingSuggestions && (
-        <motion.div
-          key="suggestions-skeleton"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -20 }}
-          transition={{ duration: 0.3 }}
-          className="mx-auto max-w-6xl space-y-4"
-        >
-          <h2 className="text-2xl font-bold">Suggestions</h2>
-          <SuggestionsSkeleton />
-        </motion.div>
-      )}
+  if (!isGettingSuggestions && !(showSuggestions && suggestions)) {
+    return <div ref={suggestionsRef} />;
+  }
 
-      <div
-        ref={suggestionsRef}
-        key="suggestions"
-        className="relative mx-auto mt-8 max-w-6xl space-y-8"
-      >
-        {showSuggestions && suggestions && (
-          <motion.div
-            key="suggestions-grid-container"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="space-y-4"
-          >
-            <h2 className="text-2xl font-bold">Suggestions</h2>
-            <SuggestionsGrid
-              suggestions={suggestions}
-              onReanalyze={handleReanalyze}
-              onSimulateABTest={handleSimulateABTest}
-              isAnalyzing={isAnalyzing}
-              currentAnalyzing={currentAnalyzing}
-            />
-          </motion.div>
-        )}
-      </div>
-    </AnimatePresence>
+  return (
+    <section ref={suggestionsRef} className="mt-16">
+      <p className="text-[11px] tracking-[0.18em] text-white/35 uppercase">More versions</p>
+      <h2 className="font-heading mt-2 text-[clamp(2rem,4vw,3rem)] tracking-tight">
+        {isGettingSuggestions ? 'Writing alternatives…' : 'Pick a line. Roast it again.'}
+      </h2>
+      {showSuggestions && suggestions ? (
+        <div className="mt-10">
+          <SuggestionsGrid
+            suggestions={suggestions}
+            onReanalyze={handleReanalyze}
+            onSimulateABTest={handleSimulateABTest}
+            isAnalyzing={isAnalyzing}
+            currentAnalyzing={currentAnalyzing}
+            studioContext={studioContext}
+          />
+        </div>
+      ) : null}
+    </section>
   );
 }

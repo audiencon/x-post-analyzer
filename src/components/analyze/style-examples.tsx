@@ -1,18 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
-import { Heart, MessageCircle, Repeat2, Copy, Check } from 'lucide-react';
+import { useState } from 'react';
 import { rewritePost } from '@/actions/rewrite';
+import { OpenInStudioButton } from '@/components/studio/open-in-studio-button';
 import creatorsData from '@/data/creators.json';
-import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
-
-function kConverter(num: number) {
-  return num <= 999 ? num : (0.1 * Math.floor(num / 100)).toFixed(1).replace('.0', '') + 'k';
-}
 
 interface Tweet {
   text: string;
@@ -46,39 +38,10 @@ interface Example {
   };
 }
 
-interface StyleExamplesProps {
-  content: string;
-  apiKey: string;
-}
-
-function ExampleSkeleton() {
-  return (
-    <Card className="border-0 bg-[#1a1a1a]">
-      <CardContent className="p-4">
-        <div className="flex items-start space-x-3">
-          <Skeleton className="bg-accent/10 h-10 w-10 rounded-full" />
-          <div className="flex-1 space-y-2">
-            <div className="flex items-center space-x-2">
-              <Skeleton className="bg-accent/10 h-4 w-24" />
-              <Skeleton className="bg-accent/10 h-4 w-16" />
-              <Skeleton className="bg-accent/10 h-4 w-12" />
-            </div>
-            <Skeleton className="bg-accent/10 h-20 w-full" />
-            <div className="flex space-x-4">
-              <Skeleton className="bg-accent/10 h-8 w-16" />
-              <Skeleton className="bg-accent/10 h-8 w-16" />
-              <Skeleton className="bg-accent/10 h-8 w-16" />
-            </div>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-export function StyleExamples({ content, apiKey }: StyleExamplesProps) {
+export function StyleExamples({ content }: { content: string }) {
   const [examples, setExamples] = useState<Example[]>([]);
   const [loading, setLoading] = useState(false);
+  const [started, setStarted] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -87,178 +50,115 @@ export function StyleExamples({ content, apiKey }: StyleExamplesProps) {
     try {
       await navigator.clipboard.writeText(text);
       setCopiedIndex(index);
-      toast.success('Post copied to clipboard!', {
-        className: 'bg-[#1a1a1a] border border-[#333] text-white',
-        description: 'You can now paste it anywhere',
-        duration: 2000,
-      });
+      toast.success('Copied.');
       setTimeout(() => setCopiedIndex(null), 2000);
-    } catch (err) {
-      console.error('Failed to copy text:', err);
-      toast.error('Failed to copy post', {
-        className: 'bg-[#1a1a1a] border border-[#333] text-white',
-      });
+    } catch {
+      toast.error('Could not copy.');
     }
   };
 
-  useEffect(() => {
-    let isMounted = true;
+  const handleWrite = async () => {
+    setStarted(true);
+    setLoading(true);
+    setError(null);
+    setExamples([]);
+    setCurrentIndex(0);
 
-    const fetchRewrittenPosts = async () => {
-      setLoading(true);
-      setError(null);
-      setExamples([]);
-      setCurrentIndex(0);
-
-      for (let i = 0; i < creatorsData.creators.length; i++) {
-        if (!isMounted) return;
-
-        const creator = creatorsData.creators[i];
-        try {
-          const result = await rewritePost(content, creator.handle.replace('@', ''), apiKey);
-
-          if (isMounted) {
-            setExamples(prev => [
-              ...prev,
-              {
-                creator,
-                text: result.text,
-                scores: result.scores,
-                metrics: result.metrics,
-              },
-            ]);
-            setCurrentIndex(i + 1);
-          }
-        } catch (err) {
-          console.error(err);
-          if (isMounted) {
-            setError(`Failed to generate example for ${creator.name}`);
-            setCurrentIndex(i + 1);
-          }
-        }
+    for (let i = 0; i < creatorsData.creators.length; i++) {
+      const creator = creatorsData.creators[i];
+      try {
+        const result = await rewritePost(content, creator.handle.replace('@', ''));
+        setExamples(prev => [
+          ...prev,
+          {
+            creator,
+            text: result.text,
+            scores: result.scores,
+            metrics: result.metrics,
+          },
+        ]);
+        setCurrentIndex(i + 1);
+      } catch {
+        setError(`Could not write in ${creator.name}'s voice.`);
+        setCurrentIndex(i + 1);
       }
+    }
 
-      if (isMounted) {
-        setLoading(false);
-      }
-    };
-
-    fetchRewrittenPosts();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [content, apiKey]);
+    setLoading(false);
+  };
 
   return (
-    <div className="space-y-4">
-      {loading && (
-        <div className="text-muted-foreground text-sm">
-          Generating example {currentIndex + 1} of {creatorsData.creators.length}...
-        </div>
-      )}
+    <section>
+      <p className="text-[11px] tracking-[0.18em] text-white/35 uppercase">In their voice</p>
+      <h2 className="font-heading mt-2 max-w-xl text-[clamp(2rem,4vw,3rem)] tracking-tight">
+        Same point. Different mouth.
+      </h2>
 
-      {error && <div className="text-destructive text-sm">{error}</div>}
+      {!started ? (
+        <button
+          type="button"
+          onClick={handleWrite}
+          className="mt-6 text-sm text-white/40 hover:text-white"
+        >
+          Write in other voices
+        </button>
+      ) : null}
 
-      <div className="grid gap-4">
-        {creatorsData.creators.map((creator, index) => {
-          const example = examples[index];
+      {loading ? (
+        <p className="mt-4 text-sm text-white/35">
+          Writing {Math.min(currentIndex + 1, creatorsData.creators.length)} of{' '}
+          {creatorsData.creators.length}
+        </p>
+      ) : null}
+      {error ? <p className="mt-4 text-sm text-[oklch(0.72_0.16_28)]">{error}</p> : null}
 
-          if (!example) {
-            return <ExampleSkeleton key={creator.handle} />;
-          }
+      {started ? (
+        <div className="mt-10 space-y-0">
+          {creatorsData.creators
+            .slice(0, Math.max(examples.length, loading ? currentIndex + 1 : 0))
+            .map((creator, index) => {
+              const example = examples[index];
 
-          return (
-            <Card key={creator.handle} className="border-0 bg-[#1a1a1a] p-0">
-              <CardContent className="p-4">
-                <div className="flex items-start space-x-3">
-                  <Avatar className="h-10 w-10">
-                    <AvatarImage src={creator.avatar} alt={creator.name} />
-                    <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600">
-                      {creator.name[0]}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <span className="flex items-center gap-1 font-semibold text-white">
-                          {creator.name}
-
-                          <svg
-                            className="h-4 w-4 text-[#1d9bf0]"
-                            fill="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path d="M22.25 12c0-1.43-.88-2.67-2.19-3.34.46-1.39.2-2.9-.81-3.91s-2.52-1.27-3.91-.81c-.66-1.31-1.91-2.19-3.34-2.19s-2.67.88-3.33 2.19c-1.4-.46-2.91-.2-3.92.81s-1.26 2.52-.8 3.91c-1.31.67-2.2 1.91-2.2 3.34s.89 2.67 2.2 3.34c-.46 1.39-.21 2.9.8 3.91s2.52 1.26 3.91.81c.67 1.31 1.91 2.19 3.34 2.19s2.68-.88 3.34-2.19c1.39.45 2.9.2 3.91-.81s1.27-2.52.81-3.91c1.31-.67 2.19-1.91 2.19-3.34zm-11.71 4.2L6.8 12.46l1.41-1.42 2.26 2.26 4.8-5.23 1.47 1.36-6.2 6.77z" />
-                          </svg>
-                        </span>
-                        <span className="text-xs text-gray-400">{creator.handle}</span>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="hover:bg-primary cursor-pointer text-white/60 hover:text-white"
-                        onClick={() => handleCopy(example.text, index)}
-                      >
-                        {copiedIndex === index ? (
-                          <Check className="h-4 w-4 text-green-500" />
-                        ) : (
-                          <Copy className="h-4 w-4" />
-                        )}
-                      </Button>
+              return (
+                <article key={creator.handle} className="border-t border-white/8 py-8">
+                  <div className="flex items-baseline justify-between gap-4">
+                    <div>
+                      <p className="font-heading text-sm text-white/30">
+                        {String(index + 1).padStart(2, '0')}
+                      </p>
+                      <p className="mt-2 text-sm text-white/80">{creator.name}</p>
+                      <p className="text-xs text-white/35">{creator.handle}</p>
                     </div>
-                    <p className="mt-2 text-sm text-white">{example.text}</p>
-                    <div className="mt-2 flex items-center justify-between">
-                      <div className="flex space-x-4">
-                        <Button
+                    {example ? (
+                      <div className="flex items-center gap-4 text-xs">
+                        <OpenInStudioButton
                           variant="ghost"
-                          size="sm"
-                          className="text-gray-400 hover:text-blue-500"
+                          className="h-auto rounded-none px-0 text-white/35 hover:bg-transparent hover:text-white"
+                          draft={{ tweets: [example.text], title: creator.name }}
+                          label="Studio"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(example.text, index)}
+                          className="text-white/35 hover:text-white"
                         >
-                          <MessageCircle className="h-4 w-4" />
-                          <span className="text-sm">{kConverter(example.metrics.comments)}</span>
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-gray-400 hover:text-green-500"
-                        >
-                          <Repeat2 className="h-4 w-4" />
-                          <span className="text-sm">{kConverter(example.metrics.reposts)}</span>
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-gray-400 hover:text-red-500"
-                        >
-                          <Heart className="h-4 w-4" />
-                          <span className="text-sm">{kConverter(example.metrics.likes)}</span>
-                        </Button>
-                        <div className="flex items-center gap-1 text-sm text-gray-400">
-                          <svg
-                            className="h-[1.25em]"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={1.5}
-                              d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"
-                            />
-                          </svg>
-                          <span>{kConverter(example.metrics.impressions)}</span>
-                        </div>
+                          {copiedIndex === index ? 'Copied' : 'Copy'}
+                        </button>
                       </div>
-                    </div>
+                    ) : null}
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-    </div>
+                  {example ? (
+                    <p className="mt-5 max-w-3xl text-[1.02rem] leading-7 whitespace-pre-wrap text-white/75">
+                      {example.text}
+                    </p>
+                  ) : (
+                    <p className="mt-5 text-sm text-white/30">Writing…</p>
+                  )}
+                </article>
+              );
+            })}
+        </div>
+      ) : null}
+    </section>
   );
 }

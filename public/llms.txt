@@ -1,0 +1,25 @@
+# PostRoast
+
+> AI roast for X drafts. Sign in, paste a post, get Engage / Warmth / Viral / Payout scores and a rewrite you would ship. Ten free roasts a day. Does not post or schedule on X.
+
+## Docs
+
+- [Home](https://www.postroast.app/): Product overview, four scores, pricing, and FAQ.
+- [Roast](https://www.postroast.app/roast): Paste an X draft. Requires sign-in. 10 free roasts/day.
+- [Studio](https://www.postroast.app/studio): Signed-in thread workspace after the roast. Unlimited drafts on Studio plan.
+- [Ideas](https://www.postroast.app/ideas): Eight niche drafts worth roasting, then the roast.
+- [Pricing](https://www.postroast.app/#pricing): Free $0 (10 roasts/day), Pro $19/mo, Studio $32/mo, Founder $199 lifetime (100 seats).
+- [FAQ](https://www.postroast.app/faq): Accounts, scores, Pro vs Studio, Compose on X, draft storage.
+- [Compare](https://www.postroast.app/vs): PostRoast vs Typefully, SupaBird, and GrowthX.
+
+## Optional
+
+- [Founder](https://www.postroast.app/founder): $199 lifetime Studio, 100 seats.
+- [Terms](https://www.postroast.app/terms): Roast is an opinion. Caps, billing, as-is.
+- [Privacy](https://www.postroast.app/privacy): Drafts stored. Processors: Better Auth, Stripe, PostHog, OpenAI, Neon, Vercel.
+
+## About
+
+- Operator: Audiencon ([@audiencon](https://x.com/audiencon))
+- What we do not do: schedule posts, post as you, sell drafts, invent customer counts
+- Scores: Engage, Warmth, Viral, Payout (Original Content Rewards post-shape, not a cash forecast)
